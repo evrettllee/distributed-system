@@ -6,6 +6,8 @@ namespace Server.Repositories;
 public class JsonRepository<T> : IRepository<T> where T : class
 {
     private readonly string _filePath;
+    private readonly object _lock;
+    private static readonly Dictionary<string, object> _locks = new();
 
     private static readonly JsonSerializerOptions _options = new()
     {
@@ -17,6 +19,15 @@ public class JsonRepository<T> : IRepository<T> where T : class
     public JsonRepository(string filePath)
     {
         _filePath = filePath;
+
+        lock (_locks)
+        {
+            if (!_locks.ContainsKey(filePath))
+            {
+                _locks[filePath] = new object();
+            }
+            _lock = _locks[filePath];
+        }
 
         string? dir = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -32,58 +43,73 @@ public class JsonRepository<T> : IRepository<T> where T : class
 
     public List<T> GetAll()
     {
-        string json = File.ReadAllText(_filePath).Trim();
-        if (string.IsNullOrEmpty(json))
+        lock (_lock)
         {
-            File.WriteAllText(_filePath, "[]");
-            return new List<T>();
+            string json = File.ReadAllText(_filePath).Trim();
+            if (string.IsNullOrEmpty(json))
+            {
+                File.WriteAllText(_filePath, "[]");
+                return new List<T>();
+            }
+            return JsonSerializer.Deserialize<List<T>>(json, _options) ?? new List<T>();
         }
-        return JsonSerializer.Deserialize<List<T>>(json, _options) ?? new List<T>();
     }
 
     public T? GetById(int id)
     {
-        List<T> all = GetAll();
-        return all.FirstOrDefault(item => GetId(item) == id);
+        lock (_lock)
+        {
+            List<T> all = GetAll();
+            return all.FirstOrDefault(item => GetId(item) == id);
+        }
     }
 
     public void Add(T entity)
     {
-        List<T> all = GetAll();
+        lock (_lock)
+        {
+            List<T> all = GetAll();
 
-        int nextId = all.Count > 0 ? all.Max(item => GetId(item)) + 1 : 1;
-        SetId(entity, nextId);
+            int nextId = all.Count > 0 ? all.Max(item => GetId(item)) + 1 : 1;
+            SetId(entity, nextId);
 
-        all.Add(entity);
-        Save(all);
+            all.Add(entity);
+            Save(all);
+        }
     }
 
     public void Update(T entity)
     {
-        List<T> all = GetAll();
-        int id = GetId(entity);
-        int index = all.FindIndex(item => GetId(item) == id);
-
-        if (index == -1)
+        lock (_lock)
         {
-            throw new KeyNotFoundException($"Сущность с id {id} не найдена");
-        }
+            List<T> all = GetAll();
+            int id = GetId(entity);
+            int index = all.FindIndex(item => GetId(item) == id);
 
-        all[index] = entity;
-        Save(all);
+            if (index == -1)
+            {
+                throw new KeyNotFoundException($"Сущность с id {id} не найдена");
+            }
+
+            all[index] = entity;
+            Save(all);
+        }
     }
 
     public void Delete(int id)
     {
-        List<T> all = GetAll();
-        int removed = all.RemoveAll(item => GetId(item) == id);
-
-        if (removed == 0)
+        lock (_lock)
         {
-            throw new KeyNotFoundException($"Сущность с id {id} не найдена");
-        }
+            List<T> all = GetAll();
+            int removed = all.RemoveAll(item => GetId(item) == id);
 
-        Save(all);
+            if (removed == 0)
+            {
+                throw new KeyNotFoundException($"Сущность с id {id} не найдена");
+            }
+
+            Save(all);
+        }
     }
 
     private void Save(List<T> entities)

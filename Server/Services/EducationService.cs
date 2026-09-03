@@ -45,21 +45,19 @@ namespace Server.Services
             }
 
             bool alreadyEnrolled = _enrollments.GetAll()
-                .Any(e => e.StudentId == studentId && e.CourseId == courseId);
+                .Any(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
 
             if (alreadyEnrolled)
             {
                 return Response.Error("Студент уже записан на этот курс");
             }
 
-            Enrollment enrollment = new()
+            _enrollments.Add(new Enrollment
             {
                 StudentId = studentId,
                 CourseId = courseId,
                 IsCompleted = false
-            };
-
-            _enrollments.Add(enrollment);
+            });
 
             return Response.Ok(message: $"Студент '{student.FullName}' записан на курс '{course.Title}'");
         }
@@ -88,6 +86,14 @@ namespace Server.Services
                 return Response.Error("Задание уже сдано");
             }
 
+            bool isEnrolled = _enrollments.GetAll()
+                .Any(e => e.StudentId == assignment.StudentId && e.CourseId == assignment.CourseId && !e.IsCompleted);
+
+            if (!isEnrolled)
+            {
+                return Response.Error("Студент не записан на курс этого задания");
+            }
+
             assignment.IsSubmitted = true;
             _assignments.Update(assignment);
 
@@ -96,23 +102,41 @@ namespace Server.Services
 
         public Response CompleteCourse(int studentId, int courseId)
         {
+            Student? student = _students.GetById(studentId);
+            if (student == null)
+            {
+                return Response.Error($"Студент с id {studentId} не найден");
+            }
+
+            Course? course = _courses.GetById(courseId);
+            if (course == null)
+            {
+                return Response.Error($"Курс с id {courseId} не найден");
+            }
+
             Enrollment? enrollment = _enrollments.GetAll()
-                .FirstOrDefault(e => e.StudentId == studentId && e.CourseId == courseId);
+                .FirstOrDefault(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
 
             if (enrollment == null)
             {
-                return Response.Error("Студент не записан на этот курс");
+                return Response.Error("Студент не записан на этот курс или курс уже завершён");
             }
 
-            if (enrollment.IsCompleted)
+            List<Assignment> courseAssignments = _assignments.GetAll()
+                .Where(a => a.StudentId == studentId && a.CourseId == courseId)
+                .ToList();
+
+            bool hasUnsumbitted = courseAssignments.Any(a => !a.IsSubmitted);
+            if (hasUnsumbitted)
             {
-                return Response.Error("Курс уже завершён");
+                int count = courseAssignments.Count(a => !a.IsSubmitted);
+                return Response.Error($"Нельзя завершить курс: не сдано заданий — {count}");
             }
 
             enrollment.IsCompleted = true;
             _enrollments.Update(enrollment);
 
-            return Response.Ok(message: $"Курс с id {courseId} отмечен как завершённый");
+            return Response.Ok(message: $"Студент '{student.FullName}' завершил курс '{course.Title}'");
         }
     }
 }
