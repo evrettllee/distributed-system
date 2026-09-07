@@ -105,10 +105,27 @@ namespace Tests
         [Fact]
         public void SubmitAssignment_ValidData_ReturnsOk()
         {
+            _service.EnrollStudent(1, 1);
             Response response = _service.SubmitAssignment(1);
 
             Assert.Equal("ok", response.Status);
             Assert.Contains("сдано", response.Message);
+        }
+
+        // Тест 7 — запись на заполненный курс
+        [Fact]
+        public void EnrollStudent_CourseIsFull_ReturnsError()
+        {
+            _courses.Add(new Course { Title = "Маленький курс", TeacherId = 1, MaxStudents = 1 });
+
+            _students.Add(new Student { FullName = "Петров Пётр", Email = "petrov@mail.ru" });
+            _service.EnrollStudent(1, 2);
+
+            _students.Add(new Student { FullName = "Сидоров Сидор", Email = "sidorov@mail.ru" });
+            Response response = _service.EnrollStudent(3, 2);
+
+            Assert.Equal("error", response.Status);
+            Assert.Contains("заполнен", response.Message);
         }
 
         public void Dispose()

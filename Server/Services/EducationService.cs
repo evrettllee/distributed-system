@@ -52,6 +52,14 @@ namespace Server.Services
                 return Response.Error("Студент уже записан на этот курс");
             }
 
+            int currentStudents = _enrollments.GetAll()
+                .Count(e => e.CourseId == courseId && !e.IsCompleted);
+
+            if (currentStudents >= course.MaxStudents)
+            {
+                return Response.Error($"Курс заполнен: максимум {course.MaxStudents} студентов");
+            }
+
             _enrollments.Add(new Enrollment
             {
                 StudentId = studentId,
@@ -59,7 +67,7 @@ namespace Server.Services
                 IsCompleted = false
             });
 
-            return Response.Ok(message: $"Студент '{student.FullName}' записан на курс '{course.Title}'");
+            return Response.Ok(message: $"Студент '{student.FullName}' записан на курс '{course.Title}' ({currentStudents + 1}/{course.MaxStudents})");
         }
 
         public Response GetCourse(int courseId)
