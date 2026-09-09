@@ -3,7 +3,6 @@ using Server.Models;
 using Server.Repositories;
 using Server.Services;
 using Shared;
-using System.Net.Sockets;
 using Xunit;
 
 namespace Tests
@@ -20,7 +19,6 @@ namespace Tests
 
         public EducationServiceTests()
         {
-            // создаём временную папку для тестовых данных
             _testDataPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
             Directory.CreateDirectory(_testDataPath);
 
@@ -32,109 +30,89 @@ namespace Tests
             _service = new EducationService(_students, _courses, _enrollments, _assignments);
             _handler = new OperationHandler(_service);
 
-            // начальные данные
             _students.Add(new Student { FullName = "Иванов Иван", Email = "ivanov@mail.ru" });
-            _courses.Add(new Course { Title = "Основы программирования", TeacherId = 1 });
-            _assignments.Add(new Assignment { Title = "Задание 1", CourseId = 1, StudentId = 1, IsSubmitted = false });
+            _students.Add(new Student { FullName = "Петров Пётр", Email = "petrov@mail.ru" });
+            _courses.Add(new Course { Title = "Основы программирования", TeacherId = 1, MaxStudents = 30 });
         }
 
-        // Тест 1 — успешный сценарий: запись студента на курс
+        // Тест 1 — один клиент: обычная обработка запроса
         [Fact]
-        public void EnrollStudent_ValidData_ReturnsOk()
+        public async Task OneClient_EnrollStudent_ReturnsOk()
         {
-            Response response = _service.EnrollStudent(1, 1);
+            Response response = await _service.EnrollStudent(1, 1);
 
             Assert.Equal("ok", response.Status);
             Assert.Contains("Иванов Иван", response.Message);
         }
 
-        // Тест 2 — неизвестная операция
+        // Тест 2 — два клиента: оба запроса обрабатываются успешно
         [Fact]
-        public void Handle_UnknownOperation_ReturnsError()
+        public async Task TwoClients_BothEnrolled_ReturnsOk()
         {
-            Request request = new() { Operation = "DeleteEverything", Data = null };
+            Task<Response> task1 = _service.EnrollStudent(1, 1);
+            Task<Response> task2 = _service.EnrollStudent(2, 1);
 
-            Response response = _handler.Handle(request);
+            Response[] responses = await Task.WhenAll(task1, task2);
 
-            Assert.Equal("error", response.Status);
-            Assert.Contains("Неизвестная операция", response.Message);
+            Assert.Equal("ok", responses[0].Status);
+            Assert.Equal("ok", responses[1].Status);
         }
 
-        // Тест 3 — некорректные данные: студент не существует
+        // Тест 3 — параллельная обработка: Client 2 начал до завершения Client 1
         [Fact]
-        public void EnrollStudent_StudentNotFound_ReturnsError()
+        public async Task TwoClients_ProcessedInParallel()
         {
-            Response response = _service.EnrollStudent(999, 1);
+            DateTime start1 = DateTime.MinValue;
+            DateTime start2 = DateTime.MinValue;
+            DateTime end1 = DateTime.MinValue;
 
-            Assert.Equal("error", response.Status);
-            Assert.Contains("не найден", response.Message);
-        }
-
-        // Тест 4 — недоступный сервер
-        [Fact]
-        public void Connect_ServerUnavailable_ReturnsError()
-        {
-            // пытаемся подключиться на заведомо закрытый порт
-            Response response;
-            try
+            Task task1 = Task.Run(async () =>
             {
-                using TcpClient client = new("127.0.0.1", 5000);
-                response = Response.Error("Подключение не должно было состояться");
-            }
-            catch (SocketException)
+                start1 = DateTime.Now;
+                await _service.EnrollStudent(1, 1);
+                end1 = DateTime.Now;
+            });
+
+            // небольшая пауза чтобы Client 1 успел начать обработку
+            await Task.Delay(500);
+
+            Task task2 = Task.Run(async () =>
             {
-                response = Response.Error("Не удалось подключиться к серверу");
-            }
+                start2 = DateTime.Now;
+                await _service.EnrollStudent(2, 1);
+            });
 
-            Assert.Equal("error", response.Status);
-            Assert.Contains("Не удалось подключиться", response.Message);
+            await Task.WhenAll(task1, task2);
+
+            // Client 2 начал до завершения Client 1 — значит обработка шла параллельно
+            Assert.True(start2 < end1, $"Client 2 начал в {start2:HH:mm:ss.fff}, Client 1 завершил в {end1:HH:mm:ss.fff}");
         }
 
-        // Тест 5 — повторная запись на курс
+        // Тест 4 — Race Condition: оба клиента записались на курс с MaxStudents = 1
         [Fact]
-        public void EnrollStudent_AlreadyEnrolled_ReturnsError()
+        public async Task TwoClients_RaceCondition_BothSucceed()
         {
-            _service.EnrollStudent(1, 1);
-            Response response = _service.EnrollStudent(1, 1);
-
-            Assert.Equal("error", response.Status);
-            Assert.Contains("уже записан", response.Message);
-        }
-
-        // Тест 6 — сдача задания
-        [Fact]
-        public void SubmitAssignment_ValidData_ReturnsOk()
-        {
-            _service.EnrollStudent(1, 1);
-            Response response = _service.SubmitAssignment(1);
-
-            Assert.Equal("ok", response.Status);
-            Assert.Contains("сдано", response.Message);
-        }
-
-        // Тест 7 — запись на заполненный курс
-        [Fact]
-        public void EnrollStudent_CourseIsFull_ReturnsError()
-        {
+            // курс только на 1 место
             _courses.Add(new Course { Title = "Маленький курс", TeacherId = 1, MaxStudents = 1 });
 
-            _students.Add(new Student { FullName = "Петров Пётр", Email = "petrov@mail.ru" });
-            _service.EnrollStudent(1, 2);
+            Task<Response> task1 = _service.EnrollStudent(1, 2);
+            Task<Response> task2 = _service.EnrollStudent(2, 2);
 
-            _students.Add(new Student { FullName = "Сидоров Сидор", Email = "sidorov@mail.ru" });
-            Response response = _service.EnrollStudent(3, 2);
+            Response[] responses = await Task.WhenAll(task1, task2);
 
-            Assert.Equal("error", response.Status);
-            Assert.Contains("заполнен", response.Message);
+            // оба получили ok — Race Condition сработал
+            Assert.True(responses.All(r => r.Status == "ok"),
+                $"Client 1: {responses[0].Status} | Client 2: {responses[1].Status}");
+
+            // в итоге записалось больше студентов, чем позволяет курс
+            int enrolled = _enrollments.GetAll().Count(e => e.CourseId == 2 && !e.IsCompleted);
+            Assert.True(enrolled > 1, $"Записано студентов: {enrolled}, а должно быть не более 1");
         }
 
         public void Dispose()
         {
-            // удаляем временные файлы после каждого теста
             if (Directory.Exists(_testDataPath))
-            {
                 Directory.Delete(_testDataPath, recursive: true);
-            }
         }
     }
 }

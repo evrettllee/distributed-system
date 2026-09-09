@@ -30,35 +30,30 @@ namespace Server.Services
             _assignments = assignments;
         }
 
-        public Response EnrollStudent(int studentId, int courseId)
+        public async Task<Response> EnrollStudent(int studentId, int courseId)
         {
             Student? student = _students.GetById(studentId);
             if (student == null)
-            {
                 return Response.Error($"Студент с id {studentId} не найден");
-            }
 
             Course? course = _courses.GetById(courseId);
             if (course == null)
-            {
                 return Response.Error($"Курс с id {courseId} не найден");
-            }
 
             bool alreadyEnrolled = _enrollments.GetAll()
                 .Any(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
 
             if (alreadyEnrolled)
-            {
                 return Response.Error("Студент уже записан на этот курс");
-            }
 
             int currentStudents = _enrollments.GetAll()
                 .Count(e => e.CourseId == courseId && !e.IsCompleted);
 
             if (currentStudents >= course.MaxStudents)
-            {
                 return Response.Error($"Курс заполнен: максимум {course.MaxStudents} студентов");
-            }
+
+            // задержка для демонстрации race condition
+            await Task.Delay(5_000);
 
             _enrollments.Add(new Enrollment
             {
@@ -70,37 +65,29 @@ namespace Server.Services
             return Response.Ok(message: $"Студент '{student.FullName}' записан на курс '{course.Title}' ({currentStudents + 1}/{course.MaxStudents})");
         }
 
-        public Response GetCourse(int courseId)
+        public async Task<Response> GetCourse(int courseId)
         {
             Course? course = _courses.GetById(courseId);
             if (course == null)
-            {
                 return Response.Error($"Курс с id {courseId} не найден");
-            }
 
             return Response.Ok(JsonSerializer.Serialize(course, _jsonOptions));
         }
 
-        public Response SubmitAssignment(int assignmentId)
+        public async Task<Response> SubmitAssignment(int assignmentId)
         {
             Assignment? assignment = _assignments.GetById(assignmentId);
             if (assignment == null)
-            {
                 return Response.Error($"Задание с id {assignmentId} не найдено");
-            }
 
             if (assignment.IsSubmitted)
-            {
                 return Response.Error("Задание уже сдано");
-            }
 
             bool isEnrolled = _enrollments.GetAll()
                 .Any(e => e.StudentId == assignment.StudentId && e.CourseId == assignment.CourseId && !e.IsCompleted);
 
             if (!isEnrolled)
-            {
                 return Response.Error("Студент не записан на курс этого задания");
-            }
 
             assignment.IsSubmitted = true;
             _assignments.Update(assignment);
@@ -108,34 +95,28 @@ namespace Server.Services
             return Response.Ok(message: $"Задание '{assignment.Title}' сдано");
         }
 
-        public Response CompleteCourse(int studentId, int courseId)
+        public async Task<Response> CompleteCourse(int studentId, int courseId)
         {
             Student? student = _students.GetById(studentId);
             if (student == null)
-            {
                 return Response.Error($"Студент с id {studentId} не найден");
-            }
 
             Course? course = _courses.GetById(courseId);
             if (course == null)
-            {
                 return Response.Error($"Курс с id {courseId} не найден");
-            }
 
             Enrollment? enrollment = _enrollments.GetAll()
                 .FirstOrDefault(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
 
             if (enrollment == null)
-            {
                 return Response.Error("Студент не записан на этот курс или курс уже завершён");
-            }
 
             List<Assignment> courseAssignments = _assignments.GetAll()
                 .Where(a => a.StudentId == studentId && a.CourseId == courseId)
                 .ToList();
 
-            bool hasUnsumbitted = courseAssignments.Any(a => !a.IsSubmitted);
-            if (hasUnsumbitted)
+            bool hasUnsubmitted = courseAssignments.Any(a => !a.IsSubmitted);
+            if (hasUnsubmitted)
             {
                 int count = courseAssignments.Count(a => !a.IsSubmitted);
                 return Response.Error($"Нельзя завершить курс: не сдано заданий — {count}");

@@ -1,5 +1,6 @@
 ﻿using Client.Network;
 using Shared;
+using System.Text.Json;
 
 ServerClient client = new();
 
@@ -15,29 +16,51 @@ while (true)
 
     string? choice = Console.ReadLine();
 
+    if (choice == "0") break;
+
     Response response = choice switch
     {
         "1" => EnrollStudent(client),
         "2" => GetCourse(client),
         "3" => SubmitAssignment(client),
         "4" => CompleteCourse(client),
-        "0" => null!,
         _ => Response.Error("Неизвестная команда")
     };
 
-    if (choice == "0")
-    {
-        break;
-    }
+    PrintResponse(response);
+}
 
-    Console.WriteLine($"\nСтатус: {response.Status}");
+static void PrintResponse(Response response)
+{
+    bool isOk = response.Status == "ok";
+
+    Console.WriteLine();
+    Console.ForegroundColor = isOk ? ConsoleColor.Green : ConsoleColor.Red;
+    Console.WriteLine(isOk ? "SUCCESS" : "ERROR");
+    Console.ResetColor();
+
     if (response.Message != null)
-    {
-        Console.WriteLine($"Сообщение: {response.Message}");
-    }
+        Console.WriteLine($"-- {response.Message}");
+
     if (response.Data != null)
+        PrintCourse(response.Data);
+}
+
+static void PrintCourse(string json)
+{
+    try
     {
-        Console.WriteLine($"Данные: {response.Data}");
+        var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Console.WriteLine($"-- Курс: {root.GetProperty("Title").GetString()}");
+        Console.WriteLine($"-- Id: {root.GetProperty("Id").GetInt32()}");
+        Console.WriteLine($"-- Id проподавателя: {root.GetProperty("TeacherId").GetInt32()}");
+        Console.WriteLine($"-- Макс. студентов: {root.GetProperty("MaxStudents").GetInt32()}");
+    }
+    catch
+    {
+        Console.WriteLine($"-- {json}");
     }
 }
 

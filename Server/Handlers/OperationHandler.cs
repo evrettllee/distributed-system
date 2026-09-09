@@ -18,16 +18,16 @@ namespace Server.Handlers
             _service = service;
         }
 
-        public Response Handle(Request request)
+        public async Task<Response> Handle(Request request)
         {
             try
             {
                 return request.Operation switch
                 {
-                    "EnrollStudent" => HandleEnrollStudent(request.Data),
-                    "GetCourse" => HandleGetCourse(request.Data),
-                    "SubmitAssignment" => HandleSubmitAssignment(request.Data),
-                    "CompleteCourse" => HandleCompleteCourse(request.Data),
+                    "EnrollStudent" => await HandleEnrollStudent(request.Data),
+                    "GetCourse" => await HandleGetCourse(request.Data),
+                    "SubmitAssignment" => await HandleSubmitAssignment(request.Data),
+                    "CompleteCourse" => await HandleCompleteCourse(request.Data),
                     _ => Response.Error($"Неизвестная операция: {request.Operation}")
                 };
             }
@@ -37,68 +37,52 @@ namespace Server.Handlers
             }
         }
 
-        private Response HandleEnrollStudent(string? data)
+        private async Task<Response> HandleEnrollStudent(string? data)
         {
             if (data == null)
-            {
                 return Response.Error("Данные запроса отсутствуют");
-            }
 
             var payload = JsonSerializer.Deserialize<EnrollStudentPayload>(data, _jsonOptions);
             if (payload == null)
-            {
                 return Response.Error("Неверный формат данных");
-            }
 
-            return _service.EnrollStudent(payload.StudentId, payload.CourseId);
+            return await _service.EnrollStudent(payload.StudentId, payload.CourseId);
         }
 
-        private Response HandleGetCourse(string? data)
+        private async Task<Response> HandleGetCourse(string? data)
         {
             if (data == null)
-            {
                 return Response.Error("Данные запроса отсутствуют");
-            }
 
             var payload = JsonSerializer.Deserialize<IdPayload>(data, _jsonOptions);
             if (payload == null)
-            {
                 return Response.Error("Неверный формат данных");
-            }
 
-            return _service.GetCourse(payload.Id);
+            return await _service.GetCourse(payload.Id);
         }
 
-        private Response HandleSubmitAssignment(string? data)
+        private async Task<Response> HandleSubmitAssignment(string? data)
         {
             if (data == null)
-            {
                 return Response.Error("Данные запроса отсутствуют");
-            }
 
             var payload = JsonSerializer.Deserialize<IdPayload>(data, _jsonOptions);
             if (payload == null)
-            {
                 return Response.Error("Неверный формат данных");
-            }
 
-            return _service.SubmitAssignment(payload.Id);
+            return await _service.SubmitAssignment(payload.Id);
         }
 
-        private Response HandleCompleteCourse(string? data)
+        private async Task<Response> HandleCompleteCourse(string? data)
         {
             if (data == null)
-            {
                 return Response.Error("Данные запроса отсутствуют");
-            }
 
             var payload = JsonSerializer.Deserialize<CompleteCoursePayload>(data, _jsonOptions);
             if (payload == null)
-            {
                 return Response.Error("Неверный формат данных");
-            }
 
-            return _service.CompleteCourse(payload.StudentId, payload.CourseId);
+            return await _service.CompleteCourse(payload.StudentId, payload.CourseId);
         }
     }
 

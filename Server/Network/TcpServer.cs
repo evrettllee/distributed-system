@@ -12,6 +12,7 @@ namespace Server.Network
         private readonly OperationHandler _handler;
         private readonly TcpListener _listener;
         private readonly int _port;
+        private int _clientCounter = 0;
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
@@ -33,15 +34,16 @@ namespace Server.Network
             while (true)
             {
                 TcpClient client = _listener.AcceptTcpClient();
-                Thread thread = new(() => HandleClient(client));
-                thread.Start();
+                int clientId = Interlocked.Increment(ref _clientCounter);
+                Task.Run(() => HandleClient(client, clientId));
             }
         }
 
-        private void HandleClient(TcpClient client)
+        private async Task HandleClient(TcpClient client, int clientId)
         {
             string clientAddress = client.Client.RemoteEndPoint?.ToString() ?? "неизвестный адрес";
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Клиент подключился: {clientAddress}");
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> CONNECT ({clientAddress})");
 
             using (client)
             {
@@ -54,6 +56,7 @@ namespace Server.Network
                     string? line = reader.ReadLine();
                     if (line == null)
                     {
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> пустой запрос");
                         return;
                     }
 
@@ -65,19 +68,35 @@ namespace Server.Network
                         return;
                     }
 
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Операция от {clientAddress}: {request.Operation}");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> START | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
 
-                    Response response = _handler.Handle(request);
+                    // задержка для демонстрации параллельной обработки клиентов
+                    await Task.Delay(10_000);
+
+                    Response response = await _handler.Handle(request);
                     writer.WriteLine(JsonSerializer.Serialize(response));
+
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> END   | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
+                }
+                catch (IOException)
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> отключился во время обработки");
                 }
                 catch (Exception ex)
                 {
-                    Response error = Response.Error($"Ошибка сервера: {ex.Message}");
-                    writer.WriteLine(JsonSerializer.Serialize(error));
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> ОШИБКА: {ex.Message}");
+                    try
+                    {
+                        NetworkStream stream2 = client.GetStream();
+                        StreamWriter writer2 = new(stream2, Encoding.UTF8) { AutoFlush = true };
+                        Response error = Response.Error($"Ошибка сервера: {ex.Message}");
+                        writer2.WriteLine(JsonSerializer.Serialize(error));
+                    }
+                    catch { }
                 }
                 finally
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Клиент отключился: {clientAddress}");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> DISCONNECT ({clientAddress})");
                 }
             }
         }
