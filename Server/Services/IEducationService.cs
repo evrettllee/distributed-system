@@ -8,5 +8,6 @@ namespace Server.Services
         Task<Response> GetCourse(int courseId);
         Task<Response> SubmitAssignment(int assignmentId);
         Task<Response> CompleteCourse(int studentId, int courseId);
+        Task<Response> GetServerTime();
     }
 }

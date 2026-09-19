@@ -28,6 +28,7 @@ namespace Server.Handlers
                     "GetCourse" => await HandleGetCourse(request.Data),
                     "SubmitAssignment" => await HandleSubmitAssignment(request.Data),
                     "CompleteCourse" => await HandleCompleteCourse(request.Data),
+                    "GetServerTime" => await _service.GetServerTime(),
                     _ => Response.Error($"Неизвестная операция: {request.Operation}")
                 };
             }

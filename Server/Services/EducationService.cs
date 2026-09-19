@@ -174,5 +174,11 @@ namespace Server.Services
                 return Response.Ok(message: $"Студент '{student.FullName}' завершил курс '{course.Title}'");
             }
         }
+
+        public async Task<Response> GetServerTime()
+        {
+            await Task.Delay(2_000);
+            return Response.Ok(DateTime.UtcNow.ToString("O"));
+        }
     }
 }

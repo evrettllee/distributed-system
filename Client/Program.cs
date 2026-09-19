@@ -2,7 +2,10 @@
 using Shared;
 using System.Text.Json;
 
-ServerClient client = new();
+Console.Write("Введите смещение часов (секунды, 0 если нет): ");
+int offset = int.TryParse(Console.ReadLine(), out int parsed) ? parsed : 0;
+
+ServerClient client = new(clockOffsetSeconds: offset);
 
 while (true)
 {
@@ -11,12 +14,26 @@ while (true)
     Console.WriteLine("2. Получить курс (GetCourse)");
     Console.WriteLine("3. Сдать задание (SubmitAssignment)");
     Console.WriteLine("4. Завершить курс (CompleteCourse)");
+    Console.WriteLine("5. Показать локальное время");
+    Console.WriteLine("6. Синхронизировать время с сервером");
     Console.WriteLine("0. Выход");
     Console.Write("> ");
 
     string? choice = Console.ReadLine();
 
     if (choice == "0") break;
+
+    if (choice == "5")
+    {
+        Console.WriteLine($"\n  Local time: {client.LocalTime:HH:mm:ss.fff}");
+        continue;
+    }
+
+    if (choice == "6")
+    {
+        client.SyncTime();
+        continue;
+    }
 
     Response response = choice switch
     {
@@ -55,7 +72,7 @@ static void PrintCourse(string json)
 
         Console.WriteLine($"-- Курс: {root.GetProperty("Title").GetString()}");
         Console.WriteLine($"-- Id: {root.GetProperty("Id").GetInt32()}");
-        Console.WriteLine($"-- Id проподавателя: {root.GetProperty("TeacherId").GetInt32()}");
+        Console.WriteLine($"-- Id преподавателя: {root.GetProperty("TeacherId").GetInt32()}");
         Console.WriteLine($"-- Макс. студентов: {root.GetProperty("MaxStudents").GetInt32()}");
     }
     catch

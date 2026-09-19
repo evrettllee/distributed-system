@@ -9,11 +9,16 @@ namespace Client.Network
     {
         private readonly string _host;
         private readonly int _port;
+        private readonly TimeSpan _clockOffset;
+        private TimeSpan _timeOffset = TimeSpan.Zero;
 
-        public ServerClient(string host = "127.0.0.1", int port = 8080)
+        public DateTime LocalTime => DateTime.UtcNow + _clockOffset;
+
+        public ServerClient(string host = "127.0.0.1", int port = 8080, int clockOffsetSeconds = 0)
         {
             _host = host;
             _port = port;
+            _clockOffset = TimeSpan.FromSeconds(clockOffsetSeconds);
         }
 
         public Response Send(string operation, object? data = null)
@@ -54,6 +59,41 @@ namespace Client.Network
             {
                 return Response.Error($"Ошибка: {ex.Message}");
             }
+        }
+
+        public void SyncTime()
+        {
+            DateTime requestTime = DateTime.UtcNow;
+
+            Response response = Send("GetServerTime");
+
+            DateTime responseTime = DateTime.UtcNow;
+
+            if (response.Status != "ok" || response.Data == null)
+            {
+                Console.WriteLine("Не удалось получить время сервера");
+                return;
+            }
+
+            if (!DateTime.TryParse(response.Data, out DateTime serverTime))
+            {
+                Console.WriteLine("Некорректные данные времени");
+                return;
+            }
+
+            TimeSpan rtt = responseTime - requestTime;
+            TimeSpan networkDelay = rtt / 2;
+            DateTime correctedServerTime = serverTime + networkDelay;
+
+            _timeOffset = correctedServerTime - LocalTime;
+
+            Console.WriteLine();
+            Console.WriteLine($"  Local time:        {LocalTime:HH:mm:ss.fff}");
+            Console.WriteLine($"  Server time:       {serverTime:HH:mm:ss.fff}");
+            Console.WriteLine($"  RTT:               {rtt.TotalSeconds:F3} sec");
+            Console.WriteLine($"  Network delay:     {networkDelay.TotalSeconds:F3} sec");
+            Console.WriteLine($"  Calculated offset: {_timeOffset.TotalSeconds:F3} sec");
+            Console.WriteLine($"  Corrected time:    {(LocalTime + _timeOffset):HH:mm:ss.fff}");
         }
     }
 }
