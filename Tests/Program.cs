@@ -73,7 +73,6 @@ namespace Tests
                 end1 = DateTime.Now;
             });
 
-            // небольшая пауза чтобы Client 1 успел начать обработку
             await Task.Delay(500);
 
             Task task2 = Task.Run(async () =>
@@ -84,15 +83,13 @@ namespace Tests
 
             await Task.WhenAll(task1, task2);
 
-            // Client 2 начал до завершения Client 1 — значит обработка шла параллельно
             Assert.True(start2 < end1, $"Client 2 начал в {start2:HH:mm:ss.fff}, Client 1 завершил в {end1:HH:mm:ss.fff}");
         }
 
-        // Тест 4 — Race Condition: оба клиента записались на курс с MaxStudents = 1
+        // Тест 4 — с синхронизацией: Race Condition устранён, курс на 1 место — только один успешен
         [Fact]
-        public async Task TwoClients_RaceCondition_BothSucceed()
+        public async Task TwoClients_WithLock_RaceCondition_IsFixed()
         {
-            // курс только на 1 место
             _courses.Add(new Course { Title = "Маленький курс", TeacherId = 1, MaxStudents = 1 });
 
             Task<Response> task1 = _service.EnrollStudent(1, 2);
@@ -100,13 +97,109 @@ namespace Tests
 
             Response[] responses = await Task.WhenAll(task1, task2);
 
-            // оба получили ok — Race Condition сработал
-            Assert.True(responses.All(r => r.Status == "ok"),
-                $"Client 1: {responses[0].Status} | Client 2: {responses[1].Status}");
-
-            // в итоге записалось больше студентов, чем позволяет курс
+            int successCount = responses.Count(r => r.Status == "ok");
             int enrolled = _enrollments.GetAll().Count(e => e.CourseId == 2 && !e.IsCompleted);
-            Assert.True(enrolled > 1, $"Записано студентов: {enrolled}, а должно быть не более 1");
+
+            Assert.Equal(1, successCount);
+            Assert.Equal(1, enrolled);
+        }
+
+        // Тест 5 — синхронизация: 10 параллельных клиентов, курс на 3 места — ровно 3 успешных
+        [Fact]
+        public async Task ManyClients_WithLock_ExactlyMaxStudentsSucceed()
+        {
+            int maxStudents = 3;
+            _courses.Add(new Course { Title = "Ограниченный курс", TeacherId = 1, MaxStudents = maxStudents });
+
+            for (int i = 3; i <= 12; i++)
+                _students.Add(new Student { FullName = $"Студент {i}", Email = $"student{i}@mail.ru" });
+
+            List<Task<Response>> tasks = Enumerable.Range(1, 10)
+                .Select(i => _service.EnrollStudent(i, 2))
+                .ToList();
+
+            Response[] responses = await Task.WhenAll(tasks);
+
+            int successCount = responses.Count(r => r.Status == "ok");
+            int enrolled = _enrollments.GetAll().Count(e => e.CourseId == 2 && !e.IsCompleted);
+
+            Assert.Equal(maxStudents, successCount);
+            Assert.Equal(maxStudents, enrolled);
+        }
+
+        // Тест 6 — GetServerTime возвращает корректное время в ISO формате
+        [Fact]
+        public async Task GetServerTime_ReturnsValidDateTime()
+        {
+            DateTime before = DateTime.UtcNow;
+
+            Response response = await _service.GetServerTime();
+
+            DateTime after = DateTime.UtcNow;
+
+            Assert.Equal("ok", response.Status);
+            Assert.NotNull(response.Data);
+
+            bool parsed = DateTime.TryParse(response.Data, out DateTime serverTime);
+            Assert.True(parsed, "Время сервера не удалось распарсить");
+
+            serverTime = serverTime.ToUniversalTime();
+            Assert.True(serverTime >= before && serverTime <= after,
+                $"Время сервера {serverTime:O} выходит за пределы [{before:O}, {after:O}]");
+        }
+
+        // Тест 7 — расчёт смещения: offset = serverTime - clientTime
+        [Fact]
+        public async Task TimeSync_OffsetCalculation_IsCorrect()
+        {
+            TimeSpan clockOffset = TimeSpan.FromSeconds(7);
+
+            Response response = await _service.GetServerTime();
+            DateTime clientLocalTime = DateTime.UtcNow + clockOffset;
+            DateTime serverTime = DateTime.Parse(response.Data!).ToUniversalTime();
+
+            TimeSpan offset = serverTime - clientLocalTime;
+
+            Assert.True(offset.TotalSeconds < -5 && offset.TotalSeconds > -9,
+                $"Ожидалось смещение около -7 сек, получено {offset.TotalSeconds:F3} сек");
+        }
+
+        // Тест 8 — RTT измеряется корректно: больше нуля и не превышает разумный порог
+        [Fact]
+        public async Task TimeSync_RTT_IsPositiveAndReasonable()
+        {
+            DateTime requestTime = DateTime.UtcNow;
+
+            await _service.GetServerTime();
+
+            DateTime responseTime = DateTime.UtcNow;
+            TimeSpan rtt = responseTime - requestTime;
+
+            Assert.True(rtt.TotalMilliseconds > 0, "RTT должен быть больше нуля");
+            Assert.True(rtt.TotalSeconds < 10, $"RTT слишком большой: {rtt.TotalSeconds:F3} сек");
+        }
+
+        // Тест 9 — скорректированное время близко к серверному с учётом RTT/2
+        [Fact]
+        public async Task TimeSync_CorrectedTime_CloseTo_ServerTime()
+        {
+            TimeSpan clockOffset = TimeSpan.FromSeconds(7);
+
+            DateTime requestTime = DateTime.UtcNow;
+            Response response = await _service.GetServerTime();
+            DateTime responseTime = DateTime.UtcNow;
+
+            DateTime serverTime = DateTime.Parse(response.Data!).ToUniversalTime();
+            TimeSpan rtt = responseTime - requestTime;
+            TimeSpan networkDelay = rtt / 2;
+
+            DateTime clientLocalTime = requestTime + clockOffset;
+            TimeSpan timeOffset = (serverTime + networkDelay) - clientLocalTime;
+            DateTime correctedTime = clientLocalTime + timeOffset;
+
+            double diffSeconds = Math.Abs((correctedTime - serverTime).TotalSeconds);
+            Assert.True(diffSeconds < 2.0,
+                $"Скорректированное время отличается от серверного на {diffSeconds:F3} сек");
         }
 
         public void Dispose()
