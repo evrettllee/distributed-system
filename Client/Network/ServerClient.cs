@@ -31,15 +31,20 @@ namespace Client.Network
                 StreamReader reader = new(stream, Encoding.UTF8);
                 StreamWriter writer = new(stream, Encoding.UTF8) { AutoFlush = true };
 
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] -> SEND {operation}");
+
                 writer.WriteLine(JsonSerializer.Serialize(request));
 
                 string? line = reader.ReadLine();
                 if (line == null)
-                {
                     return Response.Error("Сервер не вернул ответ");
-                }
 
-                return JsonSerializer.Deserialize<Response>(line) ?? Response.Error("Не удалось разобрать ответ");
+                Response response = JsonSerializer.Deserialize<Response>(line)
+                    ?? Response.Error("Не удалось разобрать ответ");
+
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] -> RECEIVED {response.Status?.ToUpper()}");
+
+                return response;
             }
             catch (SocketException)
             {
