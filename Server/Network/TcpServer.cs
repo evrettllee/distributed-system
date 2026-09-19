@@ -1,4 +1,5 @@
-﻿using Server.Handlers;
+﻿using Server.Common;
+using Server.Handlers;
 using Shared;
 using System.Net;
 using System.Net.Sockets;
@@ -19,7 +20,7 @@ namespace Server.Network
             PropertyNameCaseInsensitive = true
         };
 
-        public TcpServer(OperationHandler handler, int port = 5000)
+        public TcpServer(OperationHandler handler, int port = 8080)
         {
             _handler = handler;
             _port = port;
@@ -70,8 +71,9 @@ namespace Server.Network
 
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> START | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
 
-                    // задержка для демонстрации параллельной обработки клиентов
                     await Task.Delay(10_000);
+
+                    ClientContext.ClientId = clientId;
 
                     Response response = await _handler.Handle(request);
                     writer.WriteLine(JsonSerializer.Serialize(response));

@@ -10,7 +10,7 @@ namespace Client.Network
         private readonly string _host;
         private readonly int _port;
 
-        public ServerClient(string host = "127.0.0.1", int port = 5000)
+        public ServerClient(string host = "127.0.0.1", int port = 8080)
         {
             _host = host;
             _port = port;
