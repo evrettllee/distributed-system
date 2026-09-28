@@ -46,6 +46,9 @@ namespace Server.Services
             {
                 Console.WriteLine($"[{Now}] {Label} -> LOCK");
 
+                // Перечитываем курс внутри lock для актуальных данных
+                course = _db.Courses.FirstOrDefault(c => c.Id == courseId)!;
+
                 bool alreadyEnrolled = _db.Enrollments
                     .Any(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
 
@@ -57,12 +60,9 @@ namespace Server.Services
                     return Response.Error("Студент уже записан на этот курс");
                 }
 
-                int currentStudents = _db.Enrollments
-                    .Count(e => e.CourseId == courseId && !e.IsCompleted);
+                Console.WriteLine($"[{Now}] {Label} -> Available = {course.AvailableStudents}");
 
-                Console.WriteLine($"[{Now}] {Label} -> Available = {course.MaxStudents - currentStudents}");
-
-                if (currentStudents >= course.MaxStudents)
+                if (course.AvailableStudents <= 0)
                 {
                     Console.WriteLine($"[{Now}] {Label} -> FAIL");
                     Console.WriteLine($"[{Now}] {Label} -> UNLOCK");
@@ -84,11 +84,12 @@ namespace Server.Services
                     _db.SaveChanges();
                     Console.WriteLine($"[{Now}] {Label} -> Операция 1: SUCCESS");
 
+                    // ДЕМОНСТРАЦИЯ ROLLBACK
                     // Console.WriteLine($"[{Now}] {Label} -> ОШИБКА внутри транзакции (симуляция)");
                     // throw new Exception("Искусственная ошибка для демонстрации ROLLBACK");
 
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: уменьшение числа мест");
-                    course.MaxStudents -= 1;
+                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: уменьшение числа доступных мест");
+                    course.AvailableStudents -= 1;
                     _db.Courses.Update(course);
                     _db.SaveChanges();
                     Console.WriteLine($"[{Now}] {Label} -> Операция 2: SUCCESS");
@@ -98,7 +99,7 @@ namespace Server.Services
                     Console.WriteLine($"[{Now}] {Label} -> SUCCESS");
                     Console.WriteLine($"[{Now}] {Label} -> UNLOCK");
 
-                    return Response.Ok(message: $"Студент '{student.FullName}' записан на курс '{course.Title}' ({currentStudents + 1}/{course.MaxStudents})");
+                    return Response.Ok(message: $"Студент '{student.FullName}' записан на курс '{course.Title}' (доступно мест: {course.AvailableStudents})");
                 }
                 catch (Exception ex)
                 {
@@ -200,8 +201,8 @@ namespace Server.Services
                     _db.SaveChanges();
                     Console.WriteLine($"[{Now}] {Label} -> Операция 1: SUCCESS");
 
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: возврат места на курсе");
-                    course.MaxStudents += 1;
+                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: возврат доступного места");
+                    course.AvailableStudents += 1;
                     _db.Courses.Update(course);
                     _db.SaveChanges();
                     Console.WriteLine($"[{Now}] {Label} -> Операция 2: SUCCESS");

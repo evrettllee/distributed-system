@@ -13,5 +13,8 @@ namespace Server.Models
         public int TeacherId { get; set; }
         [Column("max_students")]
         public int MaxStudents { get; set; } = 30;
+
+        [Column("available_students")]
+        public int AvailableStudents { get; set; }
     }
 }

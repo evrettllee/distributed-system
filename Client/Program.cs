@@ -81,6 +81,7 @@ static void PrintCourse(string json)
         Console.WriteLine($"-- Id: {root.GetProperty("Id").GetInt32()}");
         Console.WriteLine($"-- Id преподавателя: {root.GetProperty("TeacherId").GetInt32()}");
         Console.WriteLine($"-- Макс. студентов: {root.GetProperty("MaxStudents").GetInt32()}");
+        Console.WriteLine($"-- Доступно мест: {root.GetProperty("AvailableStudents").GetInt32()}");
     }
     catch
     {
