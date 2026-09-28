@@ -1,6 +1,7 @@
-﻿using Server.Handlers;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Server.Data;
 using Server.Models;
-using Server.Repositories;
 using Server.Services;
 using Shared;
 using Xunit;
@@ -9,30 +10,32 @@ namespace Tests
 {
     public class EducationServiceTests : IDisposable
     {
-        private readonly string _testDataPath;
-        private readonly IRepository<Student> _students;
-        private readonly IRepository<Course> _courses;
-        private readonly IRepository<Enrollment> _enrollments;
-        private readonly IRepository<Assignment> _assignments;
+        private readonly EducationDbContext _db;
         private readonly EducationService _service;
-        private readonly OperationHandler _handler;
+        private readonly string _dbName;
 
         public EducationServiceTests()
         {
-            _testDataPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_testDataPath);
+            _dbName = Guid.NewGuid().ToString();
 
-            _students = new JsonRepository<Student>(Path.Combine(_testDataPath, "students.json"));
-            _courses = new JsonRepository<Course>(Path.Combine(_testDataPath, "courses.json"));
-            _enrollments = new JsonRepository<Enrollment>(Path.Combine(_testDataPath, "enrollments.json"));
-            _assignments = new JsonRepository<Assignment>(Path.Combine(_testDataPath, "assignments.json"));
+            var options = new DbContextOptionsBuilder<EducationDbContext>()
+                .UseInMemoryDatabase(_dbName)
+                .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+                .Options;
 
-            _service = new EducationService(_students, _courses, _enrollments, _assignments);
-            _handler = new OperationHandler(_service);
+            _db = new EducationDbContext(options);
+            _service = new EducationService(_db);
 
-            _students.Add(new Student { FullName = "Иванов Иван", Email = "ivanov@mail.ru" });
-            _students.Add(new Student { FullName = "Петров Пётр", Email = "petrov@mail.ru" });
-            _courses.Add(new Course { Title = "Основы программирования", TeacherId = 1, MaxStudents = 30 });
+            _db.Students.AddRange(
+                new Student { Id = 1, FullName = "Иванов Иван", Email = "ivanov@mail.ru" },
+                new Student { Id = 2, FullName = "Петров Пётр", Email = "petrov@mail.ru" }
+            );
+            _db.Teachers.Add(new Teacher { Id = 1, FullName = "Смирнов", Subject = "Математика" });
+            _db.Courses.AddRange(
+                new Course { Id = 1, Title = "Основы программирования", TeacherId = 1, MaxStudents = 30 },
+                new Course { Id = 2, Title = "Маленький курс", TeacherId = 1, MaxStudents = 1 }
+            );
+            _db.SaveChanges();
         }
 
         // Тест 1 — один клиент: обычная обработка запроса
@@ -90,15 +93,13 @@ namespace Tests
         [Fact]
         public async Task TwoClients_WithLock_RaceCondition_IsFixed()
         {
-            _courses.Add(new Course { Title = "Маленький курс", TeacherId = 1, MaxStudents = 1 });
-
             Task<Response> task1 = _service.EnrollStudent(1, 2);
             Task<Response> task2 = _service.EnrollStudent(2, 2);
 
             Response[] responses = await Task.WhenAll(task1, task2);
 
             int successCount = responses.Count(r => r.Status == "ok");
-            int enrolled = _enrollments.GetAll().Count(e => e.CourseId == 2 && !e.IsCompleted);
+            int enrolled = _db.Enrollments.Count(e => e.CourseId == 2 && !e.IsCompleted);
 
             Assert.Equal(1, successCount);
             Assert.Equal(1, enrolled);
@@ -109,19 +110,29 @@ namespace Tests
         public async Task ManyClients_WithLock_ExactlyMaxStudentsSucceed()
         {
             int maxStudents = 3;
-            _courses.Add(new Course { Title = "Ограниченный курс", TeacherId = 1, MaxStudents = maxStudents });
-
+            _db.Courses.Add(new Course { Id = 3, Title = "Ограниченный курс", TeacherId = 1, MaxStudents = maxStudents });
             for (int i = 3; i <= 12; i++)
-                _students.Add(new Student { FullName = $"Студент {i}", Email = $"student{i}@mail.ru" });
+                _db.Students.Add(new Student { Id = i, FullName = $"Студент {i}", Email = $"student{i}@mail.ru" });
+            _db.SaveChanges();
+
+            var options = new DbContextOptionsBuilder<EducationDbContext>()
+     .UseInMemoryDatabase(_dbName)
+     .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+     .Options;
 
             List<Task<Response>> tasks = Enumerable.Range(1, 10)
-                .Select(i => _service.EnrollStudent(i, 2))
+                .Select(i =>
+                {
+                    var db = new EducationDbContext(options);
+                    var service = new EducationService(db);
+                    return service.EnrollStudent(i, 3);
+                })
                 .ToList();
 
             Response[] responses = await Task.WhenAll(tasks);
 
             int successCount = responses.Count(r => r.Status == "ok");
-            int enrolled = _enrollments.GetAll().Count(e => e.CourseId == 2 && !e.IsCompleted);
+            int enrolled = _db.Enrollments.Count(e => e.CourseId == 3 && !e.IsCompleted);
 
             Assert.Equal(maxStudents, successCount);
             Assert.Equal(maxStudents, enrolled);
@@ -197,15 +208,64 @@ namespace Tests
             TimeSpan timeOffset = (serverTime + networkDelay) - clientLocalTime;
             DateTime correctedTime = clientLocalTime + timeOffset;
 
-            double diffSeconds = Math.Abs((correctedTime - serverTime).TotalSeconds);
-            Assert.True(diffSeconds < 2.0,
+            DateTime actualServerNow = serverTime + networkDelay;
+
+            double diffSeconds = Math.Abs((correctedTime - actualServerNow).TotalSeconds);
+            Assert.True(diffSeconds < 0.1,
                 $"Скорректированное время отличается от серверного на {diffSeconds:F3} сек");
+        }
+
+        // Тест 10 — транзакция COMMIT: обе операции сохранены в БД
+        [Fact]
+        public async Task EnrollStudent_WithTransaction_Commit_BothOperationsSaved()
+        {
+            int maxBefore = _db.Courses.First(c => c.Id == 1).MaxStudents;
+
+            Response response = await _service.EnrollStudent(1, 1);
+
+            int maxAfter = _db.Courses.First(c => c.Id == 1).MaxStudents;
+            int enrolled = _db.Enrollments.Count(e => e.StudentId == 1 && e.CourseId == 1);
+
+            Assert.Equal("ok", response.Status);
+            Assert.Equal(1, enrolled);
+            Assert.Equal(maxBefore - 1, maxAfter);
+        }
+
+        // Тест 11 — транзакция: запись на несуществующий курс не оставляет изменений в БД
+        [Fact]
+        public async Task EnrollStudent_InvalidCourse_NoPartialChanges()
+        {
+            Response response = await _service.EnrollStudent(1, 999);
+
+            int enrolled = _db.Enrollments.Count(e => e.StudentId == 1);
+
+            Assert.NotEqual("ok", response.Status);
+            Assert.Equal(0, enrolled);
+        }
+
+        // Тест 12 — составная операция: запись невозможна если курс заполнен
+        [Fact]
+        public async Task EnrollStudent_CourseIsFull_ReturnsFail()
+        {
+            await _service.EnrollStudent(1, 2);
+            Response response = await _service.EnrollStudent(2, 2);
+
+            Assert.NotEqual("ok", response.Status);
+        }
+
+        // Тест 13 — повторная запись на курс невозможна
+        [Fact]
+        public async Task EnrollStudent_AlreadyEnrolled_ReturnsFail()
+        {
+            await _service.EnrollStudent(1, 1);
+            Response response = await _service.EnrollStudent(1, 1);
+
+            Assert.NotEqual("ok", response.Status);
         }
 
         public void Dispose()
         {
-            if (Directory.Exists(_testDataPath))
-                Directory.Delete(_testDataPath, recursive: true);
+            _db.Dispose();
         }
     }
 }

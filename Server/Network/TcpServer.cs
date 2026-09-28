@@ -30,7 +30,7 @@ namespace Server.Network
         public void Start()
         {
             _listener.Start();
-            Console.WriteLine($"Сервер запущен на {IPAddress.Any}:{_port}");
+            Console.WriteLine($"Сервер запущен на {IPAddress.Any}:{_port}\n");
 
             while (true)
             {
@@ -71,7 +71,7 @@ namespace Server.Network
 
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> START | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
 
-                    await Task.Delay(10_000);
+                    await Task.Delay(2_000);
 
                     ClientContext.ClientId = clientId;
 

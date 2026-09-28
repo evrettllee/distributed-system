@@ -15,7 +15,8 @@ while (true)
     Console.WriteLine("3. Сдать задание (SubmitAssignment)");
     Console.WriteLine("4. Завершить курс (CompleteCourse)");
     Console.WriteLine("5. Показать локальное время");
-    Console.WriteLine("6. Синхронизировать время с сервером");
+    Console.WriteLine("6. Показать разницу с сервером (до синхронизации)");
+    Console.WriteLine("7. Синхронизировать время с сервером");
     Console.WriteLine("0. Выход");
     Console.Write("> ");
 
@@ -25,11 +26,17 @@ while (true)
 
     if (choice == "5")
     {
-        Console.WriteLine($"\n  Local time: {client.LocalTime:HH:mm:ss.fff}");
+        client.ShowLocalTime();
         continue;
     }
 
     if (choice == "6")
+    {
+        client.ShowTimeDiff();
+        continue;
+    }
+
+    if (choice == "7")
     {
         client.SyncTime();
         continue;
