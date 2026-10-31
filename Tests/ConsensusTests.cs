@@ -1,11 +1,10 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Server.Consensus;
+﻿using Server.Consensus;
 using Server.Data;
 using Server.Models;
 using Server.Replication;
 using Server.Services;
 using Shared;
+using Tests.Helpers;
 using Xunit;
 
 namespace Tests
@@ -82,10 +81,8 @@ namespace Tests
         [Fact]
         public async Task Consensus_NoMajority_NotAchievedAndNotApplied()
         {
-            TestDataInstance primary = new("Primary", CreateOptions());
-            TestDataInstance replica = new("Replica", CreateOptions());
-            Seed(primary);
-            Seed(replica);
+            TestDataInstance primary = TestDatabase.CreateSeeded("Primary");
+            TestDataInstance replica = TestDatabase.CreateSeeded("Replica");
 
             Cluster cluster = new(5);
             cluster.RunElection();
@@ -99,23 +96,6 @@ namespace Tests
 
             using EducationDbContext db = primary.CreateContext();
             Assert.Equal(CourseStatus.Active, db.Courses.First(c => c.Id == 1).Status);
-        }
-
-        private static DbContextOptions<EducationDbContext> CreateOptions()
-        {
-            return new DbContextOptionsBuilder<EducationDbContext>()
-                .UseInMemoryDatabase(Guid.NewGuid().ToString())
-                .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
-                .Options;
-        }
-
-        private static void Seed(DataInstance instance)
-        {
-            using EducationDbContext db = instance.CreateContext();
-
-            db.Teachers.Add(new Teacher { Id = 1, FullName = "Смирнов", Subject = "Математика" });
-            db.Courses.Add(new Course { Id = 1, Title = "Основы программирования", TeacherId = 1, MaxStudents = 30, AvailableStudents = 30, Status = CourseStatus.Active });
-            db.SaveChanges();
         }
     }
 }

@@ -33,16 +33,17 @@ namespace Server.Subscribers
 
         public int ConnectTo(IBroker broker)
         {
-            Logger.Log(Name, $"CONNECT {broker.Name}");
-
-            int subscribed = 0;
+            List<string> subscribed = new();
             foreach (string eventType in Subscriptions)
             {
                 if (broker.Subscribe(eventType, this))
-                    subscribed++;
+                    subscribed.Add(eventType);
             }
 
-            return subscribed;
+            if (subscribed.Count > 0)
+                Logger.Log(Name, $"SUBSCRIBE {broker.Name}: {string.Join(", ", subscribed)}");
+
+            return subscribed.Count;
         }
 
         public async Task<string> HandleAsync(Event evt)
@@ -53,18 +54,14 @@ namespace Server.Subscribers
             if (!Subscriptions.Contains(evt.EventType))
                 throw new InvalidOperationException($"{Name} не подписан на {evt.EventType}");
 
-            string tag = $"[{evt.EventType}#{evt.ShortId}]";
-
             if (!_handledEvents.TryAdd(evt.Id, 0))
             {
-                Logger.Log(Name, $"DUPLICATE {tag} событие уже обработано, повторная обработка пропущена", evt.ClientId);
+                Logger.Log(Name, $"DUPLICATE {evt.Tag} событие уже обработано, повторная обработка пропущена", evt.ClientId);
                 return "уже обработано ранее, пропуск";
             }
 
             try
             {
-                Logger.Log(Name, $"START {tag} (задержка {ProcessingDelay.TotalSeconds:F1} сек)", evt.ClientId);
-
                 await Task.Delay(ProcessingDelay);
 
                 if (_state == SubscriberState.Failing)

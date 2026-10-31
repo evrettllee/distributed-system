@@ -13,6 +13,8 @@ namespace Server.Events
 
         public string ShortId => Id.ToString()[..8];
 
+        public string Tag => $"[{EventType}#{ShortId}]";
+
         public string DataText => string.Join(", ", Data.Select(kv => $"{kv.Key}={kv.Value}"));
 
         public static Event Create(string eventType, int entityId, Dictionary<string, string>? data = null) => new()

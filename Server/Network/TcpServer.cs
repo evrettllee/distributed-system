@@ -13,7 +13,7 @@ namespace Server.Network
         private readonly OperationHandler _handler;
         private readonly TcpListener _listener;
         private readonly int _port;
-        private int _clientCounter = 0;
+        private int _clientCounter;
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
@@ -30,7 +30,7 @@ namespace Server.Network
         public void Start()
         {
             _listener.Start();
-            Console.WriteLine($"Сервер запущен на {IPAddress.Any}:{_port}\n");
+            Logger.Log($"Сервер запущен на {IPAddress.Any}:{_port}");
 
             while (true)
             {
@@ -46,8 +46,6 @@ namespace Server.Network
 
             string clientAddress = client.Client.RemoteEndPoint?.ToString() ?? "неизвестный адрес";
 
-            Logger.Log($"CONNECT ({clientAddress})");
-
             using (client)
             {
                 NetworkStream stream = client.GetStream();
@@ -59,7 +57,7 @@ namespace Server.Network
                     string? line = reader.ReadLine();
                     if (line == null)
                     {
-                        Logger.Log("пустой запрос");
+                        Logger.Log($"пустой запрос ({clientAddress})");
                         return;
                     }
 
@@ -75,24 +73,25 @@ namespace Server.Network
 
                     if (request == null)
                     {
-                        Logger.Log("некорректный запрос");
+                        Logger.Log($"некорректный запрос ({clientAddress})");
                         Response error = Response.Error("Неверный формат запроса");
                         writer.WriteLine(JsonSerializer.Serialize(error));
                         return;
                     }
 
-                    Logger.Log($"START | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
+                    Logger.Log($"REQUEST {request.Operation} ({clientAddress})");
 
                     await Task.Delay(2_000);
 
                     Response response = await _handler.Handle(request);
                     writer.WriteLine(JsonSerializer.Serialize(response));
 
-                    Logger.Log($"END   | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
+                    if (response.Status != "ok")
+                        Logger.Log($"{request.Operation} -> ERROR ({response.Message?.Split('\n')[^1].TrimStart('-', ' ')})");
                 }
                 catch (IOException)
                 {
-                    Logger.Log("отключился во время обработки");
+                    Logger.Log($"DISCONNECT ({clientAddress}): отключился во время обработки");
                 }
                 catch (Exception ex)
                 {
@@ -102,11 +101,10 @@ namespace Server.Network
                         Response error = Response.Error($"Ошибка сервера: {ex.Message}");
                         writer.WriteLine(JsonSerializer.Serialize(error));
                     }
-                    catch { }
-                }
-                finally
-                {
-                    Logger.Log($"DISCONNECT ({clientAddress})");
+                    catch
+                    {
+                        Logger.Log($"DISCONNECT ({clientAddress}): ответ не отправлен");
+                    }
                 }
             }
         }

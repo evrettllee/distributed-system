@@ -24,8 +24,6 @@ namespace Server.PubSub
 
         public PublishResult Publish(Event evt)
         {
-            Logger.Log("Publisher", $"PUBLISH {evt}", evt.ClientId);
-
             List<string> failures = new();
 
             foreach (IBroker broker in _brokers)
@@ -54,10 +52,8 @@ namespace Server.PubSub
                     return result;
                 }
 
-                if (failures.Count > 0)
-                    Logger.Log("Publisher", $"FAILOVER -> {broker.Name}", evt.ClientId);
-
-                Logger.Log("Publisher", $"SUCCESS ({result.Message})", evt.ClientId);
+                string failover = failures.Count > 0 ? " (FAILOVER)" : "";
+                Logger.Log("Publisher", $"PUBLISH {evt} -> {result.Message}{failover}", evt.ClientId);
                 return result;
             }
 
@@ -73,7 +69,7 @@ namespace Server.PubSub
             lock (_lock)
                 _errors.Add(entry);
 
-            Logger.Log("Publisher", $"FAIL ({message})", evt.ClientId);
+            Logger.Log("Publisher", $"PUBLISH {evt} -> FAIL ({message})", evt.ClientId);
         }
     }
 }

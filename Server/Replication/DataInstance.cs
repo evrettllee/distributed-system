@@ -23,8 +23,7 @@ namespace Server.Replication
 
         public InstanceState CheckState()
         {
-            Logger.Log($" {Name} -> CHECK");
-
+            InstanceState previous = State;
             string? error = null;
 
             try
@@ -39,9 +38,9 @@ namespace Server.Replication
             }
 
             if (error != null)
-                Logger.Log($" {Name} -> {StateText} ({error})");
-            else
-                Logger.Log($" {Name} -> {StateText}");
+                Logger.Log(Name, $"{StateText} ({error})");
+            else if (State != previous)
+                Logger.Log(Name, StateText);
 
             return State;
         }

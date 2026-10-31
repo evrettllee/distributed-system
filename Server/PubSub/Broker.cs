@@ -58,8 +58,6 @@ namespace Server.PubSub
 
                 _peers.Add(peer);
             }
-
-            Logger.Log(Name, $"PEER -> {peer.Name}");
         }
 
         public bool Subscribe(string eventType, ISubscriber subscriber)
@@ -89,7 +87,6 @@ namespace Server.PubSub
                 list.Add(subscriber);
             }
 
-            Logger.Log(Name, $"SUBSCRIBE {subscriber.Name} -> {eventType}");
             return true;
         }
 
@@ -140,10 +137,7 @@ namespace Server.PubSub
         public PublishResult Publish(Event evt)
         {
             if (!_isAvailable)
-            {
-                Logger.Log(Name, $"UNAVAILABLE (событие {evt} не принято)", evt.ClientId);
                 throw new BrokerUnavailableException(Name);
-            }
 
             string? error = evt.Validate();
             if (error != null)
@@ -152,22 +146,14 @@ namespace Server.PubSub
                 return PublishResult.Fail($"некорректное событие: {error}", Name);
             }
 
-            DateTime acceptedAt = DateTime.Now;
             Interlocked.Increment(ref _received);
-
-            Logger.Log(Name, $"EVENT RECEIVED {evt}", evt.ClientId);
 
             IReadOnlyList<ISubscriber> subscribers = GetSubscribers(evt.EventType);
 
             if (subscribers.Count == 0)
-            {
-                Logger.Log(Name, $"нет подписчиков на {evt.EventType}", evt.ClientId);
                 return PublishResult.Ok(Name, 0, Task.FromResult<IReadOnlyList<DeliveryResult>>([]));
-            }
 
-            Logger.Log(Name, $"ROUTE {evt.EventType} -> {string.Join(", ", subscribers.Select(s => s.Name))}", evt.ClientId);
-
-            Task<IReadOnlyList<DeliveryResult>> delivery = Task.Run(() => DeliverAllAsync(evt, subscribers, acceptedAt));
+            Task<IReadOnlyList<DeliveryResult>> delivery = Task.Run(() => DeliverAllAsync(evt, subscribers));
 
             return PublishResult.Ok(Name, subscribers.Count, delivery);
         }
@@ -177,8 +163,7 @@ namespace Server.PubSub
             if (!_isAvailable)
                 throw new BrokerUnavailableException(Name);
 
-            if (TryAddToQueue(item))
-                Logger.Log(Name, $"REPLICA <- {item.Subscriber.Name} {Tag(item.Event)} (копия от {item.Owner}, в очереди: {QueueCount})", item.Event.ClientId);
+            TryAddToQueue(item);
         }
 
         public void RemoveReplica(Guid eventId, string subscriberName)
@@ -210,8 +195,6 @@ namespace Server.PubSub
                 if (ready.Count == 0)
                     return 0;
 
-                Logger.Log(Name, $"QUEUE PROCESSING (готово к доставке: {ready.Count}, всего в очереди: {QueueCount})");
-
                 int delivered = 0;
                 foreach (PendingDelivery item in ready)
                 {
@@ -220,7 +203,7 @@ namespace Server.PubSub
                     if (item.Owner != Name)
                     {
                         label = $"Takeover({item.Owner})";
-                        Logger.Log(Name, $"TAKEOVER {item.Subscriber.Name} {Tag(item.Event)} (хозяин {item.Owner} недоступен)", item.Event.ClientId);
+                        Logger.Log(Name, $"TAKEOVER {item.Subscriber.Name} {item.Event.Tag} (хозяин {item.Owner} недоступен)", item.Event.ClientId);
                     }
 
                     DeliveryResult result = await TryDeliverAsync(item.Event, item.Subscriber, label, DateTime.Now, 1);
@@ -235,7 +218,7 @@ namespace Server.PubSub
                     delivered++;
                 }
 
-                Logger.Log(Name, $"QUEUE PROCESSED (доставлено: {delivered}, осталось в очереди: {QueueCount})");
+                Logger.Log(Name, $"QUEUE PROCESSED (доставлено: {delivered} из {ready.Count}, осталось в очереди: {QueueCount})");
                 return delivered;
             }
             finally
@@ -264,31 +247,19 @@ namespace Server.PubSub
             });
         }
 
-        private async Task<IReadOnlyList<DeliveryResult>> DeliverAllAsync(Event evt, IReadOnlyList<ISubscriber> subscribers, DateTime acceptedAt)
+        private async Task<IReadOnlyList<DeliveryResult>> DeliverAllAsync(Event evt, IReadOnlyList<ISubscriber> subscribers)
         {
             DeliveryResult[] results = await Task.WhenAll(
                 subscribers.Select(s => Task.Run(() => DeliverAsync(evt, s))));
 
-            TimeSpan total = DateTime.Now - acceptedAt;
             int succeeded = results.Count(r => r.Success);
-
-            Logger.Log(Name, $"DELIVERY COMPLETE {evt} (успешно: {succeeded}/{results.Length})", evt.ClientId);
-
-            foreach (DeliveryResult result in results.Where(r => !r.Success))
-                Logger.Log(Name, $"  НЕ ДОСТАВЛЕНО {result.SubscriberName}: {result.Status.ToString().ToUpper()} ({result.Message}) -> событие в очереди", evt.ClientId);
-
-            string details = string.Join(" | ", results.Select(r =>
-                $"{r.SubscriberName}: доставка {(r.StartedAt - acceptedAt).TotalSeconds:F3}, обработка {r.Duration.TotalSeconds:F3}, попыток {r.Attempts}"));
-
-            Logger.Log(Name, $"TIMING {Tag(evt)} публикация {(acceptedAt - evt.Timestamp).TotalSeconds:F3} | {details} | все завершены через {total.TotalSeconds:F3} сек", evt.ClientId);
+            Logger.Log(Name, $"DELIVERY COMPLETE {evt.Tag} (успешно: {succeeded}/{results.Length})", evt.ClientId);
 
             return results;
         }
 
         private async Task<DeliveryResult> DeliverAsync(Event evt, ISubscriber subscriber)
         {
-            Logger.Log(Name, $"{subscriber.Name} {Tag(evt)}", evt.ClientId);
-
             DateTime startedAt = DateTime.Now;
             DeliveryResult result = await TryDeliverAsync(evt, subscriber, $"Attempt 1/{MaxAttempts}", startedAt, 1);
 
@@ -313,23 +284,21 @@ namespace Server.PubSub
 
         private static async Task<DeliveryResult> TryDeliverAsync(Event evt, ISubscriber subscriber, string label, DateTime startedAt, int attempts)
         {
-            string tag = Tag(evt);
-
             try
             {
                 string message = await subscriber.HandleAsync(evt);
                 DeliveryResult result = DeliveryResult.Create(subscriber.Name, DeliveryStatus.Success, message, startedAt, attempts);
-                Logger.Log(subscriber.Name, $"{label} {tag} -> SUCCESS {message} ({result.Duration.TotalSeconds:F3} сек)", evt.ClientId);
+                Logger.Log(subscriber.Name, $"{label} {evt.Tag} -> SUCCESS {message} ({result.Duration.TotalSeconds:F3} сек)", evt.ClientId);
                 return result;
             }
             catch (SubscriberUnavailableException ex)
             {
-                Logger.Log(subscriber.Name, $"{label} {tag} -> UNAVAILABLE ({ex.Message})", evt.ClientId);
+                Logger.Log(subscriber.Name, $"{label} {evt.Tag} -> UNAVAILABLE ({ex.Message})", evt.ClientId);
                 return DeliveryResult.Create(subscriber.Name, DeliveryStatus.Unavailable, ex.Message, startedAt, attempts);
             }
             catch (Exception ex)
             {
-                Logger.Log(subscriber.Name, $"{label} {tag} -> FAIL ({ex.Message})", evt.ClientId);
+                Logger.Log(subscriber.Name, $"{label} {evt.Tag} -> FAIL ({ex.Message})", evt.ClientId);
                 return DeliveryResult.Create(subscriber.Name, DeliveryStatus.Failed, ex.Message, startedAt, attempts);
             }
         }
@@ -341,7 +310,7 @@ namespace Server.PubSub
             if (!TryAddToQueue(item))
                 return;
 
-            Logger.Log(Name, $"QUEUE <- {subscriber.Name} {Tag(evt)} (в очереди: {QueueCount})", evt.ClientId);
+            Logger.Log(Name, $"QUEUE <- {subscriber.Name} {evt.Tag} (в очереди: {QueueCount})", evt.ClientId);
 
             ReplicateToPeers(item);
         }
@@ -371,7 +340,7 @@ namespace Server.PubSub
                 try
                 {
                     peer.AcceptReplica(item);
-                    Logger.Log(Name, $"REPLICATE -> {peer.Name} {item.Subscriber.Name} {Tag(item.Event)}", item.Event.ClientId);
+                    Logger.Log(Name, $"REPLICATE -> {peer.Name} {item.Subscriber.Name} {item.Event.Tag}", item.Event.ClientId);
                 }
                 catch (Exception ex)
                 {
@@ -412,7 +381,5 @@ namespace Server.PubSub
             lock (_peersLock)
                 return _peers.ToList();
         }
-
-        private static string Tag(Event evt) => $"[{evt.EventType}#{evt.ShortId}]";
     }
 }

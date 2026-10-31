@@ -1,6 +1,5 @@
 ﻿using Server.Common;
 using Server.Consensus;
-using Server.Data;
 using Server.Models;
 using Server.Replication;
 using Shared;
@@ -21,18 +20,19 @@ namespace Server.Services
             _replication = replication;
         }
 
+        private string LeaderName => _cluster.Leader?.Name ?? "не выбран";
+
         private static string NodeLine(Node node) =>
             $"-- {node.Name,-7} {node.Status.ToString().ToUpper(),-10} {node.Role.ToString().ToUpper(),-9}{(node.ForceVoteNo ? " | голосует NO" : "")}";
 
         public Response GetNodes()
         {
-            Node? leader = _cluster.Leader;
             int available = _cluster.AvailableNodes().Count;
 
             List<string> lines = new()
             {
                 $"Узлов: {_cluster.Nodes.Count}, доступно: {available}, Majority = {_cluster.Majority}",
-                $"-- Лидер: {(leader != null ? leader.Name : "не выбран")}",
+                $"-- Лидер: {LeaderName}",
                 $"-- Консенсус {(available >= _cluster.Majority ? "возможен" : "невозможен")}"
             };
             lines.AddRange(_cluster.Nodes.Select(NodeLine));
@@ -54,8 +54,7 @@ namespace Server.Services
 
             _cluster.SetNodeStatus(node, status);
 
-            Node? leader = _cluster.Leader;
-            string message = $"{node.Name} -> {status.ToString().ToUpper()}\n-- Текущий лидер: {(leader != null ? leader.Name : "не выбран")}";
+            string message = $"{node.Name} -> {status.ToString().ToUpper()}\n-- Текущий лидер: {LeaderName}";
 
             if (!available && node.Role == NodeRole.Leader)
                 message += "\n-- Отказ лидера будет обнаружен по heartbeat";
@@ -90,9 +89,7 @@ namespace Server.Services
         public Response CheckHeartbeat()
         {
             List<string> lines = _cluster.CheckHeartbeat();
-            Node? leader = _cluster.Leader;
-
-            lines.Add($"Текущий лидер: {(leader != null ? leader.Name : "не выбран")}");
+            lines.Add($"Текущий лидер: {LeaderName}");
 
             return Response.Ok(message: "Проверка heartbeat\n" + string.Join("\n", lines.Select(l => $"-- {l}")));
         }
@@ -108,18 +105,10 @@ namespace Server.Services
             if (!Enum.TryParse(status, true, out CourseStatus newStatus) || !Enum.IsDefined(newStatus) || int.TryParse(status, out _))
                 return Response.Error($"Неизвестный статус курса: {status}");
 
-            Logger.Log($" START ProposeCourseStatus");
-
             lock (_statusLock)
             {
-                DataInstance? instance = _replication.SelectInstance();
-                if (instance == null)
-                    return Response.Error("Сервис временно недоступен: Primary и Replica недоступны");
-
-                try
+                return DataAccess.Execute(_replication, (instance, db) =>
                 {
-                    using EducationDbContext db = instance.CreateContext();
-
                     Course? course = db.Courses.FirstOrDefault(c => c.Id == courseId);
                     if (course == null)
                         return Response.Error($"Курс с id {courseId} не найден");
@@ -128,28 +117,42 @@ namespace Server.Services
                     ConsensusResult result = _cluster.Propose(proposal);
 
                     if (!result.Achieved)
-                    {
-                        Logger.Log($" Статус курса не изменён");
                         return Response.Error(result.ToText() + $"\n-- Статус курса '{course.Title}' не изменён: {course.Status}");
-                    }
 
-                    using var transaction = db.Database.BeginTransaction();
-                    try
+                    string? error = DataAccess.RunTransaction(db, () =>
                     {
-                        Logger.Log($" {instance.Name} -> UPDATE");
-                        Logger.Log($" BEGIN TRANSACTION");
-
                         course.Status = newStatus;
                         db.Courses.Update(course);
                         db.SaveChanges();
+                    });
 
-                        transaction.Commit();
-                        Logger.Log($" COMMIT");
-                        Logger.Log($" {instance.Name} -> SUCCESS (Status = {course.Status})");
-                    }
-                    catch (Exception ex)
+                    if (error != null)
+                        return Response.Error($"Консенсус достигнут, но сохранение отменено: {error}");
+
+                    Logger.Log($"{instance.Name} -> ProposeCourseStatus SUCCESS (Status = {course.Status})");
+
+                    ReplicationChange change = new();
+                    change.CourseIds.Add(course.Id);
+
+                    List<string> warnings = new();
+                    string? replication = DataAccess.RunAfterCommit(instance, "репликация",
+                        () => _replication.ReplicateChange(instance, change), warnings);
+
+                    List<string> lines = new()
                     {
-                        transaction.Rollback();
-                        Logger.Log($" ROLLBACK: {ex.Message}");
-                        return Response.Error($"Консенсус достигнут, но сохранение отменено: {ex.Message}");
-                    }
+                        result.ToText(),
+                        $"-- Статус курса '{course.Title}': {proposal.Current} -> {course.Status}",
+                        $"-- Экземпляр: {instance.Name}"
+                    };
+
+                    if (replication != null)
+                        lines.Add($"-- Репликация: {replication}");
+
+                    lines.AddRange(warnings);
+
+                    return Response.Ok(message: string.Join("\n", lines));
+                });
+            }
+        }
+    }
+}

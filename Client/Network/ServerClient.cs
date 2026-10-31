@@ -38,8 +38,7 @@ namespace Client.Network
                 StreamReader reader = new(stream, Encoding.UTF8);
                 StreamWriter writer = new(stream, Encoding.UTF8) { AutoFlush = true };
 
-                Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] -> SEND {operation}");
-
+                DateTime sentAt = DateTime.Now;
                 writer.WriteLine(JsonSerializer.Serialize(request));
 
                 string? line = reader.ReadLine();
@@ -49,7 +48,7 @@ namespace Client.Network
                 Response response = JsonSerializer.Deserialize<Response>(line)
                     ?? Response.Error("Не удалось разобрать ответ");
 
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] -> RECEIVED {response.Status?.ToUpper()}");
+                Console.WriteLine($"\n[{sentAt:HH:mm:ss.fff} -> {DateTime.Now:HH:mm:ss.fff}] {operation}");
 
                 return response;
             }
@@ -75,21 +74,8 @@ namespace Client.Network
 
         public void ShowTimeDiff()
         {
-            DateTime requestTime = DateTime.Now;
-            Response response = Send("GetServerTime");
-            DateTime responseTime = DateTime.Now;
-
-            if (response.Status != "ok" || response.Data == null)
-            {
-                Console.WriteLine("Не удалось получить время сервера");
+            if (!TryGetServerTime(out DateTime serverTime, out _, out _))
                 return;
-            }
-
-            if (!DateTime.TryParse(response.Data, out DateTime serverTime))
-            {
-                Console.WriteLine("Некорректные данные времени");
-                return;
-            }
 
             TimeSpan diff = LocalTime - serverTime;
 
@@ -101,21 +87,8 @@ namespace Client.Network
 
         public void SyncTime()
         {
-            DateTime requestTime = DateTime.Now;
-            Response response = Send("GetServerTime");
-            DateTime responseTime = DateTime.Now;
-
-            if (response.Status != "ok" || response.Data == null)
-            {
-                Console.WriteLine("Не удалось получить время сервера");
+            if (!TryGetServerTime(out DateTime serverTime, out DateTime requestTime, out DateTime responseTime))
                 return;
-            }
-
-            if (!DateTime.TryParse(response.Data, out DateTime serverTime))
-            {
-                Console.WriteLine("Некорректные данные времени");
-                return;
-            }
 
             TimeSpan rtt = responseTime - requestTime;
             TimeSpan networkDelay = rtt / 2;
@@ -123,8 +96,6 @@ namespace Client.Network
 
             DateTime localBefore = LocalTime;
             _timeOffset = correctedServerTime - localBefore;
-
-            DateTime actualServerNow = serverTime + networkDelay;
 
             Console.WriteLine();
             Console.WriteLine("  --- До синхронизации ---");
@@ -142,7 +113,29 @@ namespace Client.Network
             Console.WriteLine($"  Calculated offset:                {_timeOffset.TotalSeconds:F3} sec");
             Console.WriteLine($"  Corrected time:                   {CorrectedTime:HH:mm:ss.fff}");
             Console.WriteLine($"  Разница после (с serverTime):     {(CorrectedTime - serverTime).TotalSeconds:F3} sec");
-            Console.WriteLine($"  Разница после (с учётом RTT/2):   {(CorrectedTime - actualServerNow).TotalSeconds:F3} sec");
+            Console.WriteLine($"  Разница после (с учётом RTT/2):   {(CorrectedTime - correctedServerTime).TotalSeconds:F3} sec");
+        }
+
+        private bool TryGetServerTime(out DateTime serverTime, out DateTime requestTime, out DateTime responseTime)
+        {
+            requestTime = DateTime.Now;
+            Response response = Send("GetServerTime");
+            responseTime = DateTime.Now;
+            serverTime = default;
+
+            if (response.Status != "ok" || response.Data == null)
+            {
+                Console.WriteLine("Не удалось получить время сервера");
+                return false;
+            }
+
+            if (!DateTime.TryParse(response.Data, out serverTime))
+            {
+                Console.WriteLine("Некорректные данные времени");
+                return false;
+            }
+
+            return true;
         }
     }
 }

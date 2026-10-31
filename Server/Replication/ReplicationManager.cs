@@ -37,6 +37,8 @@ namespace Server.Replication
             Replica = replica;
         }
 
+        public string StatesText => $"Primary {Primary.StateText}, Replica {Replica.StateText}";
+
         public DataInstance? SelectInstance()
         {
             if (Primary.IsAvailable())
@@ -53,18 +55,16 @@ namespace Server.Replication
                 Logger.Log("Автоматическая синхронизация не выполнена, работа продолжается через Replica");
             }
 
-            Logger.Log("Failover -> START");
-
             if (!Replica.IsAvailable())
             {
                 Logger.Log("Failover -> FAIL (нет доступного экземпляра)");
                 return null;
             }
 
-            if (ReplicaOutdated)
-                Logger.Log("ВНИМАНИЕ: Replica может содержать неполные данные");
+            Logger.Log(ReplicaOutdated
+                ? "Failover -> Replica (ВНИМАНИЕ: Replica может содержать неполные данные)"
+                : "Failover -> Replica");
 
-            Logger.Log("Request redirected to Replica");
             return Replica;
         }
 
@@ -76,8 +76,6 @@ namespace Server.Replication
                 Logger.Log("Replication -> SKIP (Primary недоступен, изменение сохранено только в Replica)");
                 return "изменение выполнено через Replica, Primary будет синхронизирован после восстановления";
             }
-
-            Logger.Log("Replication -> START");
 
             if (!Replica.IsAvailable())
             {
@@ -103,11 +101,12 @@ namespace Server.Replication
                     using EducationDbContext source = Primary.CreateContext();
                     using EducationDbContext target = Replica.CreateContext();
 
-                    CopyRows<Course>(source, target, Replica.Name, "courses", c => c.Id, change.CourseIds);
-                    CopyRows<Enrollment>(source, target, Replica.Name, "enrollments", e => e.Id, change.EnrollmentIds);
-                    CopyRows<Assignment>(source, target, Replica.Name, "assignments", a => a.Id, change.AssignmentIds);
+                    List<string> changes = new();
+                    CopyRows<Course>(source, target, "courses", c => c.Id, change.CourseIds, changes);
+                    CopyRows<Enrollment>(source, target, "enrollments", e => e.Id, change.EnrollmentIds, changes);
+                    CopyRows<Assignment>(source, target, "assignments", a => a.Id, change.AssignmentIds, changes);
 
-                    Logger.Log("Replication -> SUCCESS");
+                    Logger.Log($"Replication -> SUCCESS{ChangesText(changes)}");
                     return "репликация в Replica выполнена";
                 }
                 catch (Exception ex)
@@ -123,15 +122,10 @@ namespace Server.Replication
         {
             lock (_syncLock)
             {
-                Logger.Log("Recovery -> START");
-
-                bool primaryOk = Primary.IsAvailable();
-                bool replicaOk = Replica.IsAvailable();
-
-                if (!primaryOk || !replicaOk)
+                if (!BothAvailable())
                 {
-                    Logger.Log("Recovery -> FAIL");
-                    return Response.Error($"Синхронизация невозможна: Primary {Primary.StateText}, Replica {Replica.StateText}");
+                    Logger.Log($"Recovery -> FAIL ({StatesText})");
+                    return Response.Error($"Синхронизация невозможна: {StatesText}");
                 }
 
                 List<string> before;
@@ -145,9 +139,7 @@ namespace Server.Replication
                     return Response.Error($"Ошибка чтения данных при сравнении копий: {ex.Message}");
                 }
 
-                Logger.Log($"Найдено расхождений: {before.Count}");
-                foreach (string diff in before)
-                    Logger.Log($"  {diff}");
+                LogDifferences($"Найдено расхождений: {before.Count}", before);
 
                 DataInstance source;
                 DataInstance target;
@@ -168,15 +160,14 @@ namespace Server.Replication
                     return Response.Ok(message: "Primary и Replica доступны, данные уже согласованы");
                 }
 
-                Logger.Log($"Synchronization -> START ({source.Name} -> {target.Name})");
-
+                List<string> changes;
                 try
                 {
-                    SyncAll(source, target);
+                    changes = SyncAll(source, target);
                 }
                 catch (Exception ex)
                 {
-                    Logger.Log($"Synchronization -> FAIL ({ex.Message})");
+                    Logger.Log($"Synchronization {source.Name} -> {target.Name} FAIL ({ex.Message})");
                     return Response.Error($"Ошибка синхронизации: {ex.Message}");
                 }
 
@@ -190,8 +181,7 @@ namespace Server.Replication
                 PrimaryOutdated = false;
                 ReplicaOutdated = false;
 
-                Logger.Log("Synchronization -> SUCCESS");
-                Logger.Log("Primary = Replica");
+                Logger.Log($"Synchronization {source.Name} -> {target.Name} SUCCESS, Primary = Replica{ChangesText(changes)}");
 
                 return Response.Ok(message:
                     $"Синхронизация {source.Name} -> {target.Name} выполнена\n" +
@@ -199,26 +189,6 @@ namespace Server.Replication
                     string.Concat(before.Select(d => $"--   {d}\n")) +
                     "-- После синхронизации: Primary = Replica");
             }
-        }
-
-        private void SyncAll(DataInstance source, DataInstance target)
-        {
-            using EducationDbContext src = source.CreateContext();
-            using EducationDbContext dst = target.CreateContext();
-
-            DeleteMissing<Assignment>(src, dst, target.Name, "assignments", a => a.Id);
-            DeleteMissing<Enrollment>(src, dst, target.Name, "enrollments", e => e.Id);
-            DeleteMissing<Lesson>(src, dst, target.Name, "lessons", l => l.Id);
-            DeleteMissing<Course>(src, dst, target.Name, "courses", c => c.Id);
-            DeleteMissing<Teacher>(src, dst, target.Name, "teachers", t => t.Id);
-            DeleteMissing<Student>(src, dst, target.Name, "students", s => s.Id);
-
-            CopyRows<Student>(src, dst, target.Name, "students", s => s.Id, null);
-            CopyRows<Teacher>(src, dst, target.Name, "teachers", t => t.Id, null);
-            CopyRows<Course>(src, dst, target.Name, "courses", c => c.Id, null);
-            CopyRows<Lesson>(src, dst, target.Name, "lessons", l => l.Id, null);
-            CopyRows<Enrollment>(src, dst, target.Name, "enrollments", e => e.Id, null);
-            CopyRows<Assignment>(src, dst, target.Name, "assignments", a => a.Id, null);
         }
 
         public List<string> Compare()
@@ -240,10 +210,8 @@ namespace Server.Replication
 
         public Response CompareReplicas()
         {
-            Logger.Log("Compare -> START");
-
-            if (!Primary.IsAvailable() || !Replica.IsAvailable())
-                return Response.Error($"Сравнение невозможно: Primary {Primary.StateText}, Replica {Replica.StateText}");
+            if (!BothAvailable())
+                return Response.Error($"Сравнение невозможно: {StatesText}");
 
             try
             {
@@ -255,21 +223,17 @@ namespace Server.Replication
                 List<Course> primaryCourses = primary.Courses.AsNoTracking().OrderBy(c => c.Id).ToList();
                 Dictionary<int, Course> replicaCourses = replica.Courses.AsNoTracking().ToDictionary(c => c.Id);
 
-                List<string> lines = new();
-                foreach (Course course in primaryCourses)
+                IEnumerable<string> lines = primaryCourses.Select(course =>
                 {
                     string replicaValue = replicaCourses.TryGetValue(course.Id, out Course? r)
                         ? r.AvailableStudents.ToString()
                         : "нет";
 
-                    lines.Add($"-- Курс {course.Id} '{course.Title}': Primary Available = {course.AvailableStudents} | Replica Available = {replicaValue}");
-                }
+                    return $"-- Курс {course.Id} '{course.Title}': Primary Available = {course.AvailableStudents} | Replica Available = {replicaValue}";
+                });
 
-                string result = differences.Count == 0 ? "Primary = Replica" : $"Primary != Replica, расхождений: {differences.Count}";
-                Logger.Log($"Compare -> {result}");
-
-                foreach (string diff in differences)
-                    Logger.Log($"  {diff}");
+                string result = DifferencesText(differences);
+                LogDifferences($"Compare -> {result}", differences);
 
                 return Response.Ok(message:
                     $"{result}\n" +
@@ -308,8 +272,52 @@ namespace Server.Replication
             return Response.Ok(message: status + $"-- Рабочий экземпляр: {active}");
         }
 
-        private static void CopyRows<T>(EducationDbContext source, EducationDbContext target, string targetName,
-            string table, Func<T, int> getId, ICollection<int>? ids) where T : class
+        public bool BothAvailable()
+        {
+            bool primaryOk = Primary.IsAvailable();
+            bool replicaOk = Replica.IsAvailable();
+            return primaryOk && replicaOk;
+        }
+
+        public static string DifferencesText(List<string> differences) =>
+            differences.Count == 0 ? "Primary = Replica" : $"Primary != Replica, расхождений: {differences.Count}";
+
+        public static void LogDifferences(string title, List<string> differences)
+        {
+            Logger.Log(title);
+            foreach (string diff in differences)
+                Logger.Log($"  {diff}");
+        }
+
+        private static string ChangesText(List<string> changes) =>
+            changes.Count == 0 ? "" : $" ({string.Join(", ", changes)})";
+
+        private static List<string> SyncAll(DataInstance source, DataInstance target)
+        {
+            using EducationDbContext src = source.CreateContext();
+            using EducationDbContext dst = target.CreateContext();
+
+            List<string> changes = new();
+
+            DeleteMissing<Assignment>(src, dst, "assignments", a => a.Id, changes);
+            DeleteMissing<Enrollment>(src, dst, "enrollments", e => e.Id, changes);
+            DeleteMissing<Lesson>(src, dst, "lessons", l => l.Id, changes);
+            DeleteMissing<Course>(src, dst, "courses", c => c.Id, changes);
+            DeleteMissing<Teacher>(src, dst, "teachers", t => t.Id, changes);
+            DeleteMissing<Student>(src, dst, "students", s => s.Id, changes);
+
+            CopyRows<Student>(src, dst, "students", s => s.Id, null, changes);
+            CopyRows<Teacher>(src, dst, "teachers", t => t.Id, null, changes);
+            CopyRows<Course>(src, dst, "courses", c => c.Id, null, changes);
+            CopyRows<Lesson>(src, dst, "lessons", l => l.Id, null, changes);
+            CopyRows<Enrollment>(src, dst, "enrollments", e => e.Id, null, changes);
+            CopyRows<Assignment>(src, dst, "assignments", a => a.Id, null, changes);
+
+            return changes;
+        }
+
+        private static void CopyRows<T>(EducationDbContext source, EducationDbContext target,
+            string table, Func<T, int> getId, ICollection<int>? ids, List<string> changes) where T : class
         {
             List<T> sourceRows = source.Set<T>().AsNoTracking().AsEnumerable()
                 .Where(r => ids == null || ids.Contains(getId(r)))
@@ -331,21 +339,21 @@ namespace Server.Replication
                     entry.CurrentValues.SetValues(row);
 
                     if (entry.State == EntityState.Modified)
-                        Logger.Log($"{targetName} -> UPDATE {table} id={id}");
+                        changes.Add($"UPDATE {table} id={id}");
                 }
                 else
                 {
                     target.Set<T>().Add(row);
                     hasInserts = true;
-                    Logger.Log($"{targetName} -> INSERT {table} id={id}");
+                    changes.Add($"INSERT {table} id={id}");
                 }
             }
 
             SaveRows(target, table, hasInserts);
         }
 
-        private static void DeleteMissing<T>(EducationDbContext source, EducationDbContext target, string targetName,
-            string table, Func<T, int> getId) where T : class
+        private static void DeleteMissing<T>(EducationDbContext source, EducationDbContext target,
+            string table, Func<T, int> getId, List<string> changes) where T : class
         {
             HashSet<int> sourceIds = source.Set<T>().AsNoTracking().AsEnumerable().Select(getId).ToHashSet();
             List<T> extraRows = target.Set<T>().AsEnumerable().Where(r => !sourceIds.Contains(getId(r))).ToList();
@@ -353,8 +361,7 @@ namespace Server.Replication
             if (extraRows.Count == 0)
                 return;
 
-            foreach (T row in extraRows)
-                Logger.Log($"{targetName} -> DELETE {table} id={getId(row)}");
+            changes.AddRange(extraRows.Select(row => $"DELETE {table} id={getId(row)}"));
 
             target.Set<T>().RemoveRange(extraRows);
             target.SaveChanges();

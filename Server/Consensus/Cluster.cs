@@ -112,8 +112,7 @@ namespace Server.Consensus
                         return lines;
 
                     Write("Cluster", "лидер отсутствует", true);
-                    Node? elected = RunElection("New election started");
-                    lines.Add(elected != null ? $"{elected.Name} elected as LEADER" : "LEADER NOT ELECTED");
+                    ElectNewLeader(lines);
                     return lines;
                 }
 
@@ -143,8 +142,7 @@ namespace Server.Consensus
                     Write(leader.Name, "HEARTBEAT TIMEOUT", true);
                     Write(leader.Name, "FAILED", true);
 
-                    Node? elected = RunElection("New election started");
-                    lines.Add(elected != null ? $"{elected.Name} elected as LEADER" : "LEADER NOT ELECTED");
+                    ElectNewLeader(lines);
                     return lines;
                 }
 
@@ -161,6 +159,12 @@ namespace Server.Consensus
 
                 return lines;
             }
+        }
+
+        private void ElectNewLeader(List<string> lines)
+        {
+            Node? elected = RunElection("New election started");
+            lines.Add(elected != null ? $"{elected.Name} elected as LEADER" : "LEADER NOT ELECTED");
         }
 
         public ConsensusResult Propose(Proposal proposal)
