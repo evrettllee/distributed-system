@@ -1,4 +1,5 @@
-﻿using Server.Services;
+﻿using Server.Replication;
+using Server.Services;
 using Shared;
 using System.Text.Json;
 
@@ -7,15 +8,19 @@ namespace Server.Handlers
     public class OperationHandler
     {
         private readonly IEducationService _service;
+        private readonly ReplicationManager _replication;
+        private readonly PubSubService _pubSub;
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
 
-        public OperationHandler(IEducationService service)
+        public OperationHandler(IEducationService service, ReplicationManager replication, PubSubService pubSub)
         {
             _service = service;
+            _replication = replication;
+            _pubSub = pubSub;
         }
 
         public async Task<Response> Handle(Request request)
@@ -24,13 +29,40 @@ namespace Server.Handlers
             {
                 return request.Operation switch
                 {
-                    "EnrollStudent" => await HandleEnrollStudent(request.Data),
-                    "GetCourse" => await HandleGetCourse(request.Data),
-                    "SubmitAssignment" => await HandleSubmitAssignment(request.Data),
-                    "CompleteCourse" => await HandleCompleteCourse(request.Data),
+                    "EnrollStudent" => await Run<EnrollStudentPayload>(request.Data,
+                        p => _service.EnrollStudent(p.StudentId, p.CourseId)),
+                    "GetCourse" => await Run<IdPayload>(request.Data,
+                        p => _service.GetCourse(p.Id)),
+                    "SubmitAssignment" => await Run<IdPayload>(request.Data,
+                        p => _service.SubmitAssignment(p.Id)),
+                    "CompleteCourse" => await Run<CompleteCoursePayload>(request.Data,
+                        p => _service.CompleteCourse(p.StudentId, p.CourseId)),
                     "GetServerTime" => await _service.GetServerTime(),
+                    "GetStatus" => _replication.GetStatus(),
+                    "CompareReplicas" => _replication.CompareReplicas(),
+                    "RecoverPrimary" => _replication.Recover(),
+                    "GetSubscribers" => _pubSub.GetSubscribers(),
+                    "SetSubscriberState" => await Run<SubscriberStatePayload>(request.Data,
+                        p => Task.FromResult(_pubSub.SetSubscriberState(p.Name, p.State))),
+                    "GetSubscriberCatalog" => _pubSub.GetSubscriberCatalog(),
+                    "RegisterSubscriber" => await Run<NamePayload>(request.Data,
+                        p => Task.FromResult(_pubSub.RegisterSubscriber(p.Name))),
+                    "GetBrokers" => _pubSub.GetBrokers(),
+                    "SetBrokerState" => await Run<BrokerStatePayload>(request.Data,
+                        p => Task.FromResult(_pubSub.SetBrokerState(p.Name, p.Available))),
+                    "ProcessQueue" => await _pubSub.ProcessQueueAsync(),
+                    "GetPublisherErrors" => _pubSub.GetPublisherErrors(),
+                    "GetEventStats" => _pubSub.GetEventStats(),
                     _ => Response.Error($"Неизвестная операция: {request.Operation}")
                 };
+            }
+            catch (InvalidRequestException ex)
+            {
+                return Response.Error(ex.Message);
+            }
+            catch (JsonException)
+            {
+                return Response.Error("Некорректный запрос: неверный формат данных");
             }
             catch (Exception ex)
             {
@@ -38,54 +70,20 @@ namespace Server.Handlers
             }
         }
 
-        private async Task<Response> HandleEnrollStudent(string? data)
+        private static Task<Response> Run<T>(string? data, Func<T, Task<Response>> action) where T : class
+            => action(Deserialize<T>(data));
+
+        private static T Deserialize<T>(string? data) where T : class
         {
             if (data == null)
-                return Response.Error("Данные запроса отсутствуют");
+                throw new InvalidRequestException("Данные запроса отсутствуют");
 
-            var payload = JsonSerializer.Deserialize<EnrollStudentPayload>(data, _jsonOptions);
-            if (payload == null)
-                return Response.Error("Неверный формат данных");
-
-            return await _service.EnrollStudent(payload.StudentId, payload.CourseId);
-        }
-
-        private async Task<Response> HandleGetCourse(string? data)
-        {
-            if (data == null)
-                return Response.Error("Данные запроса отсутствуют");
-
-            var payload = JsonSerializer.Deserialize<IdPayload>(data, _jsonOptions);
-            if (payload == null)
-                return Response.Error("Неверный формат данных");
-
-            return await _service.GetCourse(payload.Id);
-        }
-
-        private async Task<Response> HandleSubmitAssignment(string? data)
-        {
-            if (data == null)
-                return Response.Error("Данные запроса отсутствуют");
-
-            var payload = JsonSerializer.Deserialize<IdPayload>(data, _jsonOptions);
-            if (payload == null)
-                return Response.Error("Неверный формат данных");
-
-            return await _service.SubmitAssignment(payload.Id);
-        }
-
-        private async Task<Response> HandleCompleteCourse(string? data)
-        {
-            if (data == null)
-                return Response.Error("Данные запроса отсутствуют");
-
-            var payload = JsonSerializer.Deserialize<CompleteCoursePayload>(data, _jsonOptions);
-            if (payload == null)
-                return Response.Error("Неверный формат данных");
-
-            return await _service.CompleteCourse(payload.StudentId, payload.CourseId);
+            return JsonSerializer.Deserialize<T>(data, _jsonOptions)
+                ?? throw new InvalidRequestException("Неверный формат данных");
         }
     }
+
+    internal class InvalidRequestException(string message) : Exception(message);
 
     internal class IdPayload
     {
@@ -102,5 +100,22 @@ namespace Server.Handlers
     {
         public int StudentId { get; set; }
         public int CourseId { get; set; }
+    }
+
+    internal class SubscriberStatePayload
+    {
+        public string Name { get; set; } = string.Empty;
+        public string State { get; set; } = string.Empty;
+    }
+
+    internal class NamePayload
+    {
+        public string Name { get; set; } = string.Empty;
+    }
+
+    internal class BrokerStatePayload
+    {
+        public string Name { get; set; } = string.Empty;
+        public bool Available { get; set; }
     }
 }

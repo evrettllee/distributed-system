@@ -1,223 +1,368 @@
 ﻿using Shared;
 using Server.Models;
 using Server.Data;
+using Server.Replication;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Server.Common;
+using Server.Events;
+using Server.PubSub;
 
 namespace Server.Services
 {
     public class EducationService : IEducationService
     {
-        private readonly EducationDbContext _db;
+        private readonly ReplicationManager _replication;
+        private readonly IPublisher _publisher;
 
-        private static readonly object _enrollLock = new();
-        private static readonly object _assignmentLock = new();
-        private static readonly object _completeLock = new();
+        private static readonly Lock _enrollLock = new();
+        private static readonly Lock _assignmentLock = new();
+        private static readonly Lock _completeLock = new();
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         };
 
-        public EducationService(EducationDbContext db)
+        public EducationService(ReplicationManager replication, IPublisher publisher)
         {
-            _db = db;
+            _replication = replication;
+            _publisher = publisher;
         }
 
-        private static string Label => $"Client {ClientContext.ClientId}";
-        private static string Now => DateTime.Now.ToString("HH:mm:ss.fff");
+        private static Response Unavailable() =>
+            Response.Error("Сервис временно недоступен: Primary и Replica недоступны");
+
+        private static Response DatabaseError(DataInstance instance, Exception ex)
+        {
+            Logger.Log($" {instance.Name} -> FAIL ({ex.Message})");
+            return Response.Error($"Ошибка работы с экземпляром {instance.Name}: {ex.Message}");
+        }
+
+        private string PublishEvent(string eventType, int entityId, Dictionary<string, string> data)
+        {
+            Event evt = Event.Create(eventType, entityId, data);
+            Logger.Log("Server", $"EVENT {evt}");
+
+            PublishResult result = _publisher.Publish(evt);
+            return $"{eventType} -> {result.Message}";
+        }
 
         public async Task<Response> EnrollStudent(int studentId, int courseId)
         {
-            Student? student = _db.Students.FirstOrDefault(s => s.Id == studentId);
-            if (student == null)
-                return Response.Error($"Студент с id {studentId} не найден");
+            Logger.Log($" START EnrollStudent");
 
-            Course? course = _db.Courses.FirstOrDefault(c => c.Id == courseId);
-            if (course == null)
-                return Response.Error($"Курс с id {courseId} не найден");
+            DataInstance? instance = _replication.SelectInstance();
+            if (instance == null)
+                return Unavailable();
 
-            Console.WriteLine($"[{Now}] {Label} -> START EnrollStudent");
-
-            await Task.Delay(3_000);
-
-            lock (_enrollLock)
+            try
             {
-                Console.WriteLine($"[{Now}] {Label} -> LOCK");
+                using EducationDbContext db = instance.CreateContext();
 
-                // Перечитываем курс внутри lock для актуальных данных
-                course = _db.Courses.FirstOrDefault(c => c.Id == courseId)!;
+                Student? student = db.Students.FirstOrDefault(s => s.Id == studentId);
+                if (student == null)
+                    return Response.Error($"Студент с id {studentId} не найден");
 
-                bool alreadyEnrolled = _db.Enrollments
-                    .Any(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
+                Course? course = db.Courses.FirstOrDefault(c => c.Id == courseId);
+                if (course == null)
+                    return Response.Error($"Курс с id {courseId} не найден");
 
-                if (alreadyEnrolled)
+                await Task.Delay(3_000);
+
+                lock (_enrollLock)
                 {
-                    Console.WriteLine($"[{Now}] {Label} -> уже записан на курс");
-                    Console.WriteLine($"[{Now}] {Label} -> FAIL");
-                    Console.WriteLine($"[{Now}] {Label} -> UNLOCK");
-                    return Response.Error("Студент уже записан на этот курс");
-                }
+                    Logger.Log($" LOCK");
 
-                Console.WriteLine($"[{Now}] {Label} -> Available = {course.AvailableStudents}");
+                    db.Entry(course).Reload();
 
-                if (course.AvailableStudents <= 0)
-                {
-                    Console.WriteLine($"[{Now}] {Label} -> FAIL");
-                    Console.WriteLine($"[{Now}] {Label} -> UNLOCK");
-                    return Response.Error($"Курс заполнен: максимум {course.MaxStudents} студентов");
-                }
+                    bool alreadyEnrolled = db.Enrollments
+                        .Any(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
 
-                using var transaction = _db.Database.BeginTransaction();
-                try
-                {
-                    Console.WriteLine($"[{Now}] {Label} -> BEGIN TRANSACTION");
-
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 1: запись студента на курс");
-                    _db.Enrollments.Add(new Enrollment
+                    if (alreadyEnrolled)
                     {
-                        StudentId = studentId,
-                        CourseId = courseId,
-                        IsCompleted = false
-                    });
-                    _db.SaveChanges();
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 1: SUCCESS");
+                        Logger.Log($" уже записан на курс");
+                        Logger.Log($" FAIL");
+                        Logger.Log($" UNLOCK");
+                        return Response.Error("Студент уже записан на этот курс");
+                    }
 
-                    // ДЕМОНСТРАЦИЯ ROLLBACK
-                    // Console.WriteLine($"[{Now}] {Label} -> ОШИБКА внутри транзакции (симуляция)");
-                    // throw new Exception("Искусственная ошибка для демонстрации ROLLBACK");
+                    Logger.Log($" {instance.Name} -> Available = {course.AvailableStudents}");
 
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: уменьшение числа доступных мест");
-                    course.AvailableStudents -= 1;
-                    _db.Courses.Update(course);
-                    _db.SaveChanges();
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: SUCCESS");
+                    if (course.AvailableStudents <= 0)
+                    {
+                        Logger.Log($" FAIL");
+                        Logger.Log($" UNLOCK");
+                        return Response.Error($"Курс заполнен: максимум {course.MaxStudents} студентов");
+                    }
 
-                    transaction.Commit();
-                    Console.WriteLine($"[{Now}] {Label} -> COMMIT");
-                    Console.WriteLine($"[{Now}] {Label} -> SUCCESS");
-                    Console.WriteLine($"[{Now}] {Label} -> UNLOCK");
+                    using var transaction = db.Database.BeginTransaction();
+                    try
+                    {
+                        Logger.Log($" {instance.Name} -> UPDATE");
+                        Logger.Log($" BEGIN TRANSACTION");
 
-                    return Response.Ok(message: $"Студент '{student.FullName}' записан на курс '{course.Title}' (доступно мест: {course.AvailableStudents})");
+                        Logger.Log($" Операция 1: запись студента на курс");
+                        Enrollment enrollment = new()
+                        {
+                            StudentId = studentId,
+                            CourseId = courseId,
+                            IsCompleted = false
+                        };
+                        db.Enrollments.Add(enrollment);
+                        db.SaveChanges();
+                        Logger.Log($" Операция 1: SUCCESS");
+
+                        Logger.Log($" Операция 2: уменьшение числа доступных мест");
+                        course.AvailableStudents -= 1;
+                        db.Courses.Update(course);
+                        db.SaveChanges();
+                        Logger.Log($" Операция 2: SUCCESS");
+
+                        transaction.Commit();
+                        Logger.Log($" COMMIT");
+                        Logger.Log($" {instance.Name} -> SUCCESS (Available = {course.AvailableStudents})");
+
+                        ReplicationChange change = new();
+                        change.CourseIds.Add(course.Id);
+                        change.EnrollmentIds.Add(enrollment.Id);
+                        string replication = _replication.ReplicateChange(instance, change);
+
+                        Logger.Log($" UNLOCK");
+
+                        string eventResult = PublishEvent(EventTypes.StudentEnrolled, enrollment.Id, new()
+                        {
+                            ["StudentId"] = studentId.ToString(),
+                            ["StudentName"] = student.FullName,
+                            ["CourseId"] = courseId.ToString(),
+                            ["CourseTitle"] = course.Title,
+                            ["AvailableStudents"] = course.AvailableStudents.ToString()
+                        });
+
+                        return Response.Ok(message:
+                            $"Студент '{student.FullName}' записан на курс '{course.Title}' (доступно мест: {course.AvailableStudents})\n" +
+                            $"-- Экземпляр: {instance.Name}\n" +
+                            $"-- Репликация: {replication}\n" +
+                            $"-- Событие: {eventResult}");
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        Logger.Log($" ROLLBACK: {ex.Message}");
+                        Logger.Log($" FAIL");
+                        Logger.Log($" UNLOCK");
+                        return Response.Error($"Операция отменена: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    transaction.Rollback();
-                    Console.WriteLine($"[{Now}] {Label} -> ROLLBACK: {ex.Message}");
-                    Console.WriteLine($"[{Now}] {Label} -> FAIL");
-                    Console.WriteLine($"[{Now}] {Label} -> UNLOCK");
-                    return Response.Error($"Операция отменена: {ex.Message}");
-                }
+            }
+            catch (Exception ex)
+            {
+                return DatabaseError(instance, ex);
             }
         }
 
-        public async Task<Response> GetCourse(int courseId)
-        {
-            Course? course = _db.Courses.FirstOrDefault(c => c.Id == courseId);
-            if (course == null)
-                return Response.Error($"Курс с id {courseId} не найден");
+        public Task<Response> GetCourse(int courseId) =>
+            Task.FromResult(GetCourseCore(courseId));
 
-            return Response.Ok(JsonSerializer.Serialize(course, _jsonOptions));
-        }
-
-        public async Task<Response> SubmitAssignment(int assignmentId)
+        private Response GetCourseCore(int courseId)
         {
-            lock (_assignmentLock)
+            Logger.Log($" START GetCourse");
+
+            DataInstance? instance = _replication.SelectInstance();
+            if (instance == null)
+                return Unavailable();
+
+            try
             {
-                Assignment? assignment = _db.Assignments.FirstOrDefault(a => a.Id == assignmentId);
-                if (assignment == null)
-                    return Response.Error($"Задание с id {assignmentId} не найдено");
+                using EducationDbContext db = instance.CreateContext();
 
-                if (assignment.IsSubmitted)
-                    return Response.Error("Задание уже сдано");
+                Logger.Log($" {instance.Name} -> READ");
 
-                bool isEnrolled = _db.Enrollments
-                    .Any(e => e.StudentId == assignment.StudentId && e.CourseId == assignment.CourseId && !e.IsCompleted);
+                Course? course = db.Courses.FirstOrDefault(c => c.Id == courseId);
+                if (course == null)
+                    return Response.Error($"Курс с id {courseId} не найден");
 
-                if (!isEnrolled)
-                    return Response.Error("Студент не записан на курс этого задания");
+                Logger.Log($" {instance.Name} -> SUCCESS (Available = {course.AvailableStudents})");
 
-                using var transaction = _db.Database.BeginTransaction();
-                try
-                {
-                    Console.WriteLine($"[{Now}] {Label} -> BEGIN TRANSACTION");
-
-                    assignment.IsSubmitted = true;
-                    _db.Assignments.Update(assignment);
-                    _db.SaveChanges();
-
-                    transaction.Commit();
-                    Console.WriteLine($"[{Now}] {Label} -> COMMIT");
-
-                    return Response.Ok(message: $"Задание '{assignment.Title}' сдано");
-                }
-                catch (Exception ex)
-                {
-                    transaction.Rollback();
-                    Console.WriteLine($"[{Now}] {Label} -> ROLLBACK: {ex.Message}");
-                    return Response.Error($"Операция отменена: {ex.Message}");
-                }
+                return Response.Ok(JsonSerializer.Serialize(course, _jsonOptions), $"Экземпляр: {instance.Name}");
+            }
+            catch (Exception ex)
+            {
+                return DatabaseError(instance, ex);
             }
         }
 
-        public async Task<Response> CompleteCourse(int studentId, int courseId)
+        public Task<Response> SubmitAssignment(int assignmentId) =>
+            Task.FromResult(SubmitAssignmentCore(assignmentId));
+
+        private Response SubmitAssignmentCore(int assignmentId)
         {
-            Student? student = _db.Students.FirstOrDefault(s => s.Id == studentId);
-            if (student == null)
-                return Response.Error($"Студент с id {studentId} не найден");
+            Logger.Log($" START SubmitAssignment");
 
-            Course? course = _db.Courses.FirstOrDefault(c => c.Id == courseId);
-            if (course == null)
-                return Response.Error($"Курс с id {courseId} не найден");
+            DataInstance? instance = _replication.SelectInstance();
+            if (instance == null)
+                return Unavailable();
 
-            lock (_completeLock)
+            try
             {
-                Enrollment? enrollment = _db.Enrollments
-                    .FirstOrDefault(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
+                using EducationDbContext db = instance.CreateContext();
 
-                if (enrollment == null)
-                    return Response.Error("Студент не записан на этот курс или курс уже завершён");
-
-                List<Assignment> courseAssignments = _db.Assignments
-                    .Where(a => a.StudentId == studentId && a.CourseId == courseId)
-                    .ToList();
-
-                bool hasUnsubmitted = courseAssignments.Any(a => !a.IsSubmitted);
-                if (hasUnsubmitted)
+                lock (_assignmentLock)
                 {
-                    int count = courseAssignments.Count(a => !a.IsSubmitted);
-                    return Response.Error($"Нельзя завершить курс: не сдано заданий — {count}");
-                }
+                    Assignment? assignment = db.Assignments.FirstOrDefault(a => a.Id == assignmentId);
+                    if (assignment == null)
+                        return Response.Error($"Задание с id {assignmentId} не найдено");
 
-                using var transaction = _db.Database.BeginTransaction();
-                try
+                    if (assignment.IsSubmitted)
+                        return Response.Error("Задание уже сдано");
+
+                    bool isEnrolled = db.Enrollments
+                        .Any(e => e.StudentId == assignment.StudentId && e.CourseId == assignment.CourseId && !e.IsCompleted);
+
+                    if (!isEnrolled)
+                        return Response.Error("Студент не записан на курс этого задания");
+
+                    using var transaction = db.Database.BeginTransaction();
+                    try
+                    {
+                        Logger.Log($" {instance.Name} -> UPDATE");
+                        Logger.Log($" BEGIN TRANSACTION");
+
+                        assignment.IsSubmitted = true;
+                        db.Assignments.Update(assignment);
+                        db.SaveChanges();
+
+                        transaction.Commit();
+                        Logger.Log($" COMMIT");
+                        Logger.Log($" {instance.Name} -> SUCCESS");
+
+                        ReplicationChange change = new();
+                        change.AssignmentIds.Add(assignment.Id);
+                        string replication = _replication.ReplicateChange(instance, change);
+
+                        string eventResult = PublishEvent(EventTypes.AssignmentSubmitted, assignment.Id, new()
+                        {
+                            ["AssignmentTitle"] = assignment.Title,
+                            ["StudentId"] = assignment.StudentId.ToString(),
+                            ["CourseId"] = assignment.CourseId.ToString()
+                        });
+
+                        return Response.Ok(message:
+                            $"Задание '{assignment.Title}' сдано\n" +
+                            $"-- Экземпляр: {instance.Name}\n" +
+                            $"-- Репликация: {replication}\n" +
+                            $"-- Событие: {eventResult}");
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        Logger.Log($" ROLLBACK: {ex.Message}");
+                        return Response.Error($"Операция отменена: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return DatabaseError(instance, ex);
+            }
+        }
+
+        public Task<Response> CompleteCourse(int studentId, int courseId) =>
+            Task.FromResult(CompleteCourseCore(studentId, courseId));
+
+        private Response CompleteCourseCore(int studentId, int courseId)
+        {
+            Logger.Log($" START CompleteCourse");
+
+            DataInstance? instance = _replication.SelectInstance();
+            if (instance == null)
+                return Unavailable();
+
+            try
+            {
+                using EducationDbContext db = instance.CreateContext();
+
+                Student? student = db.Students.FirstOrDefault(s => s.Id == studentId);
+                if (student == null)
+                    return Response.Error($"Студент с id {studentId} не найден");
+
+                Course? course = db.Courses.FirstOrDefault(c => c.Id == courseId);
+                if (course == null)
+                    return Response.Error($"Курс с id {courseId} не найден");
+
+                lock (_completeLock)
                 {
-                    Console.WriteLine($"[{Now}] {Label} -> BEGIN TRANSACTION");
+                    db.Entry(course).Reload();
 
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 1: завершение записи студента");
-                    enrollment.IsCompleted = true;
-                    _db.Enrollments.Update(enrollment);
-                    _db.SaveChanges();
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 1: SUCCESS");
+                    Enrollment? enrollment = db.Enrollments
+                        .FirstOrDefault(e => e.StudentId == studentId && e.CourseId == courseId && !e.IsCompleted);
 
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: возврат доступного места");
-                    course.AvailableStudents += 1;
-                    _db.Courses.Update(course);
-                    _db.SaveChanges();
-                    Console.WriteLine($"[{Now}] {Label} -> Операция 2: SUCCESS");
+                    if (enrollment == null)
+                        return Response.Error("Студент не записан на этот курс или курс уже завершён");
 
-                    transaction.Commit();
-                    Console.WriteLine($"[{Now}] {Label} -> COMMIT");
+                    List<Assignment> courseAssignments = db.Assignments
+                        .Where(a => a.StudentId == studentId && a.CourseId == courseId)
+                        .ToList();
 
-                    return Response.Ok(message: $"Студент '{student.FullName}' завершил курс '{course.Title}'");
+                    bool hasUnsubmitted = courseAssignments.Any(a => !a.IsSubmitted);
+                    if (hasUnsubmitted)
+                    {
+                        int count = courseAssignments.Count(a => !a.IsSubmitted);
+                        return Response.Error($"Нельзя завершить курс: не сдано заданий — {count}");
+                    }
+
+                    using var transaction = db.Database.BeginTransaction();
+                    try
+                    {
+                        Logger.Log($" {instance.Name} -> UPDATE");
+                        Logger.Log($" BEGIN TRANSACTION");
+
+                        Logger.Log($" Операция 1: завершение записи студента");
+                        enrollment.IsCompleted = true;
+                        db.Enrollments.Update(enrollment);
+                        db.SaveChanges();
+                        Logger.Log($" Операция 1: SUCCESS");
+
+                        Logger.Log($" Операция 2: возврат доступного места");
+                        course.AvailableStudents += 1;
+                        db.Courses.Update(course);
+                        db.SaveChanges();
+                        Logger.Log($" Операция 2: SUCCESS");
+
+                        transaction.Commit();
+                        Logger.Log($" COMMIT");
+                        Logger.Log($" {instance.Name} -> SUCCESS (Available = {course.AvailableStudents})");
+
+                        ReplicationChange change = new();
+                        change.CourseIds.Add(course.Id);
+                        change.EnrollmentIds.Add(enrollment.Id);
+                        string replication = _replication.ReplicateChange(instance, change);
+
+                        string eventResult = PublishEvent(EventTypes.CourseCompleted, enrollment.Id, new()
+                        {
+                            ["StudentId"] = studentId.ToString(),
+                            ["StudentName"] = student.FullName,
+                            ["CourseId"] = courseId.ToString(),
+                            ["CourseTitle"] = course.Title
+                        });
+
+                        return Response.Ok(message:
+                            $"Студент '{student.FullName}' завершил курс '{course.Title}'\n" +
+                            $"-- Экземпляр: {instance.Name}\n" +
+                            $"-- Репликация: {replication}\n" +
+                            $"-- Событие: {eventResult}");
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        Logger.Log($" ROLLBACK: {ex.Message}");
+                        return Response.Error($"Операция отменена: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    transaction.Rollback();
-                    Console.WriteLine($"[{Now}] {Label} -> ROLLBACK: {ex.Message}");
-                    return Response.Error($"Операция отменена: {ex.Message}");
-                }
+            }
+            catch (Exception ex)
+            {
+                return DatabaseError(instance, ex);
             }
         }
 

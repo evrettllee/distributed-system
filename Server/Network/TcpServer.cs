@@ -42,9 +42,11 @@ namespace Server.Network
 
         private async Task HandleClient(TcpClient client, int clientId)
         {
+            ClientContext.ClientId = clientId;
+
             string clientAddress = client.Client.RemoteEndPoint?.ToString() ?? "неизвестный адрес";
 
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> CONNECT ({clientAddress})");
+            Logger.Log($"CONNECT ({clientAddress})");
 
             using (client)
             {
@@ -57,48 +59,54 @@ namespace Server.Network
                     string? line = reader.ReadLine();
                     if (line == null)
                     {
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> пустой запрос");
+                        Logger.Log("пустой запрос");
                         return;
                     }
 
-                    Request? request = JsonSerializer.Deserialize<Request>(line, _jsonOptions);
+                    Request? request;
+                    try
+                    {
+                        request = JsonSerializer.Deserialize<Request>(line, _jsonOptions);
+                    }
+                    catch (JsonException)
+                    {
+                        request = null;
+                    }
+
                     if (request == null)
                     {
+                        Logger.Log("некорректный запрос");
                         Response error = Response.Error("Неверный формат запроса");
                         writer.WriteLine(JsonSerializer.Serialize(error));
                         return;
                     }
 
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> START | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
+                    Logger.Log($"START | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
 
                     await Task.Delay(2_000);
-
-                    ClientContext.ClientId = clientId;
 
                     Response response = await _handler.Handle(request);
                     writer.WriteLine(JsonSerializer.Serialize(response));
 
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> END   | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
+                    Logger.Log($"END   | Операция: {request.Operation} | Task ID: {Task.CurrentId}");
                 }
                 catch (IOException)
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> отключился во время обработки");
+                    Logger.Log("отключился во время обработки");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> ОШИБКА: {ex.Message}");
+                    Logger.Log($"ОШИБКА: {ex.Message}");
                     try
                     {
-                        NetworkStream stream2 = client.GetStream();
-                        StreamWriter writer2 = new(stream2, Encoding.UTF8) { AutoFlush = true };
                         Response error = Response.Error($"Ошибка сервера: {ex.Message}");
-                        writer2.WriteLine(JsonSerializer.Serialize(error));
+                        writer.WriteLine(JsonSerializer.Serialize(error));
                     }
                     catch { }
                 }
                 finally
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Client {clientId} -> DISCONNECT ({clientAddress})");
+                    Logger.Log($"DISCONNECT ({clientAddress})");
                 }
             }
         }

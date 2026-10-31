@@ -3,43 +3,120 @@ using Microsoft.Extensions.Configuration;
 using Server.Data;
 using Server.Handlers;
 using Server.Network;
+using Server.PubSub;
+using Server.Replication;
 using Server.Services;
+using Server.Subscribers;
 
 var configuration = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
     .Build();
 
-var connectionString = configuration.GetConnectionString("DefaultConnection");
+string? primaryConnection = configuration.GetConnectionString("Primary");
+string? replicaConnection = configuration.GetConnectionString("Replica");
 
-if (string.IsNullOrEmpty(connectionString))
+if (string.IsNullOrEmpty(primaryConnection) || string.IsNullOrEmpty(replicaConnection))
 {
-    Console.WriteLine("Ошибка: строка подключения не найдена в appsettings.json");
+    Console.WriteLine("Ошибка: строки подключения Primary и Replica не найдены в appsettings.json");
     return;
 }
 
-var optionsBuilder = new DbContextOptionsBuilder<EducationDbContext>();
-optionsBuilder.UseSqlServer(connectionString);
+DbContextOptions<EducationDbContext> primaryOptions = new DbContextOptionsBuilder<EducationDbContext>()
+    .UseSqlServer(primaryConnection)
+    .Options;
 
-EducationDbContext context;
-try
+DbContextOptions<EducationDbContext> replicaOptions = new DbContextOptionsBuilder<EducationDbContext>()
+    .UseSqlServer(replicaConnection)
+    .Options;
+
+DataInstance primary = new("Primary", primaryOptions);
+DataInstance replica = new("Replica", replicaOptions);
+ReplicationManager replication = new(primary, replica);
+
+Console.WriteLine("--- Проверка экземпляров хранения данных ---");
+bool primaryOk = primary.IsAvailable();
+bool replicaOk = replica.IsAvailable();
+
+if (primaryOk && replicaOk)
 {
-    context = new EducationDbContext(optionsBuilder.Options);
-
-    if (!context.Database.CanConnect())
+    try
     {
-        Console.WriteLine("Ошибка: не удалось подключиться к базе данных");
-        return;
+        List<string> differences = replication.Compare();
+
+        if (differences.Count == 0)
+        {
+            Console.WriteLine("Начальное состояние: Primary = Replica");
+        }
+        else
+        {
+            Console.WriteLine($"ВНИМАНИЕ: Primary != Replica, расхождений: {differences.Count}");
+            foreach (string diff in differences)
+                Console.WriteLine($"  {diff}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Ошибка сравнения копий: {ex.Message}");
     }
 }
-catch (Exception ex)
+else if (!primaryOk && !replicaOk)
 {
-    Console.WriteLine($"Ошибка подключения к БД: {ex.Message}");
-    return;
+    Console.WriteLine("ВНИМАНИЕ: оба экземпляра недоступны, запросы будут завершаться ошибкой");
+}
+else
+{
+    Console.WriteLine($"ВНИМАНИЕ: работа в режиме одного экземпляра (Primary {primary.StateText}, Replica {replica.StateText})");
 }
 
-var service = new EducationService(context);
-var handler = new OperationHandler(service);
-var server = new TcpServer(handler);
+Console.WriteLine();
+Console.WriteLine("--- Инициализация Pub/Sub ---");
+
+Broker broker1 = new("Broker-1");
+Broker broker2 = new("Broker-2");
+Broker[] brokers = [broker1, broker2];
+
+broker1.AddPeer(broker2);
+broker2.AddPeer(broker1);
+
+LoggerSubscriber loggerSubscriber = new();
+CourseService courseService = new();
+NotificationService notificationService = new();
+
+foreach (Broker broker in brokers)
+{
+    loggerSubscriber.ConnectTo(broker);
+    courseService.ConnectTo(broker);
+    notificationService.ConnectTo(broker);
+}
+
+Publisher publisher = new(broker1, broker2);
+
+Dictionary<string, Func<ISubscriber>> subscriberCatalog = new()
+{
+    ["CertificateService"] = () => new CertificateService(),
+    ["AnalyticsService"] = () => new AnalyticsService()
+};
+
+foreach (Broker broker in brokers)
+{
+    Console.WriteLine();
+    Console.WriteLine($"--- Таблица подписок {broker.Name} ---");
+    foreach (var (eventType, names) in broker.GetSubscriptionTable())
+        Console.WriteLine($"  {eventType,-20} -> {(names.Count > 0 ? string.Join(", ", names) : "нет подписчиков")}");
+
+    broker.StartQueueProcessing(TimeSpan.FromSeconds(10));
+}
+
+Console.WriteLine();
+Console.WriteLine($"--- Порядок Broker для Publisher: {string.Join(" -> ", brokers.Select(b => b.Name))} ---");
+Console.WriteLine($"--- Репликация очереди: {string.Join(" <-> ", brokers.Select(b => b.Name))} ---");
+Console.WriteLine($"--- Каталог (не подключены): {string.Join(", ", subscriberCatalog.Keys)} ---");
+Console.WriteLine();
+
+EducationService service = new(replication, publisher);
+PubSubService pubSub = new(brokers, publisher, subscriberCatalog);
+OperationHandler handler = new(service, replication, pubSub);
+TcpServer server = new(handler);
 
 server.Start();
