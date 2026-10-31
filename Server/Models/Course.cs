@@ -16,5 +16,8 @@ namespace Server.Models
 
         [Column("available_students")]
         public int AvailableStudents { get; set; }
+
+        [Column("status")]
+        public CourseStatus Status { get; set; } = CourseStatus.Active;
     }
 }

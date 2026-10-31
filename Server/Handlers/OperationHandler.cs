@@ -10,17 +10,19 @@ namespace Server.Handlers
         private readonly IEducationService _service;
         private readonly ReplicationManager _replication;
         private readonly PubSubService _pubSub;
+        private readonly ConsensusService _consensus;
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
 
-        public OperationHandler(IEducationService service, ReplicationManager replication, PubSubService pubSub)
+        public OperationHandler(IEducationService service, ReplicationManager replication, PubSubService pubSub, ConsensusService consensus)
         {
             _service = service;
             _replication = replication;
             _pubSub = pubSub;
+            _consensus = consensus;
         }
 
         public async Task<Response> Handle(Request request)
@@ -53,6 +55,15 @@ namespace Server.Handlers
                     "ProcessQueue" => await _pubSub.ProcessQueueAsync(),
                     "GetPublisherErrors" => _pubSub.GetPublisherErrors(),
                     "GetEventStats" => _pubSub.GetEventStats(),
+                    "GetNodes" => _consensus.GetNodes(),
+                    "SetNodeState" => await Run<NodeStatePayload>(request.Data,
+                        p => Task.FromResult(_consensus.SetNodeState(p.Name, p.Available))),
+                    "SetNodeVote" => await Run<NodeVotePayload>(request.Data,
+                        p => Task.FromResult(_consensus.SetNodeVote(p.Name, p.VoteNo))),
+                    "RunElection" => _consensus.RunElection(),
+                    "CheckHeartbeat" => _consensus.CheckHeartbeat(),
+                    "ProposeCourseStatus" => await Run<CourseStatusPayload>(request.Data,
+                        p => _consensus.ProposeCourseStatus(p.CourseId, p.Status)),
                     _ => Response.Error($"Неизвестная операция: {request.Operation}")
                 };
             }
@@ -111,6 +122,24 @@ namespace Server.Handlers
     internal class NamePayload
     {
         public string Name { get; set; } = string.Empty;
+    }
+
+    internal class NodeStatePayload
+    {
+        public string Name { get; set; } = string.Empty;
+        public bool Available { get; set; }
+    }
+
+    internal class NodeVotePayload
+    {
+        public string Name { get; set; } = string.Empty;
+        public bool VoteNo { get; set; }
+    }
+
+    internal class CourseStatusPayload
+    {
+        public int CourseId { get; set; }
+        public string Status { get; set; } = string.Empty;
     }
 
     internal class BrokerStatePayload

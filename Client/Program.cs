@@ -28,6 +28,12 @@ while (true)
     Console.WriteLine("16. Состояние Broker и очередей (GetBrokers)");
     Console.WriteLine("17. Повторная доставка из очереди (ProcessQueue)");
     Console.WriteLine("18. Статистика событий (GetEventStats)");
+    Console.WriteLine("19. Состояние узлов (GetNodes)");
+    Console.WriteLine("20. Изменить состояние узла (SetNodeState)");
+    Console.WriteLine("21. Режим голосования узла (SetNodeVote)");
+    Console.WriteLine("22. Запустить выбор лидера (RunElection)");
+    Console.WriteLine("23. Проверить лидера по heartbeat (CheckHeartbeat)");
+    Console.WriteLine("24. Предложить статус курса (ProposeCourseStatus)");
     Console.WriteLine("0. Выход");
     Console.Write("> ");
 
@@ -70,6 +76,12 @@ while (true)
         "16" => client.Send("GetBrokers"),
         "17" => client.Send("ProcessQueue"),
         "18" => client.Send("GetEventStats"),
+        "19" => client.Send("GetNodes"),
+        "20" => SetNodeState(client),
+        "21" => SetNodeVote(client),
+        "22" => client.Send("RunElection"),
+        "23" => client.Send("CheckHeartbeat"),
+        "24" => ProposeCourseStatus(client),
         _ => Response.Error("Неизвестная команда")
     };
 
@@ -94,8 +106,10 @@ static void PrintResponse(Response response)
 
             if (line.Contains("Экземпляр: Replica"))
                 Console.ForegroundColor = ConsoleColor.Yellow;
-            else if (line.Contains("UNAVAILABLE") || line.Contains("FAILING") || line.Contains("UNSTABLE") || line.Contains("недоступен"))
+            else if (line.Contains("UNAVAILABLE") || line.Contains("FAILING") || line.Contains("UNSTABLE") || line.Contains("FAILED") || line.Contains("NOT ACHIEVED") || line.Contains("NOT ELECTED") || line.Contains("NO RESPONSE") || line.Contains("недоступен"))
                 Console.ForegroundColor = ConsoleColor.Red;
+            else if (line.Contains("CONSENSUS ACHIEVED") || line.Contains("LEADER"))
+                Console.ForegroundColor = ConsoleColor.Green;
 
             Console.WriteLine(line);
             Console.ResetColor();
@@ -121,6 +135,9 @@ static void PrintCourse(string json)
         Console.WriteLine($"-- Id преподавателя: {root.GetProperty("TeacherId").GetInt32()}");
         Console.WriteLine($"-- Макс. студентов: {root.GetProperty("MaxStudents").GetInt32()}");
         Console.WriteLine($"-- Доступно мест: {root.GetProperty("AvailableStudents").GetInt32()}");
+
+        if (root.TryGetProperty("Status", out JsonElement status))
+            Console.WriteLine($"-- Статус: {status}");
     }
     catch
     {
@@ -261,4 +278,70 @@ static Response SetBrokerState(ServerClient client)
         return Response.Error("Некорректный ввод: выберите 1 или 2");
 
     return client.Send("SetBrokerState", new { Name = name, Available = available });
+}
+
+static Response SetNodeState(ServerClient client)
+{
+    var (name, error) = SelectByNumber(client, "GetNodes", "Номер узла", "Нет узлов");
+    if (error != null)
+        return error;
+
+    Console.WriteLine("Состояние узла: 1 - Available, 2 - Failed");
+    Console.Write("> ");
+
+    bool? available = Console.ReadLine() switch
+    {
+        "1" => true,
+        "2" => false,
+        _ => null
+    };
+
+    if (available == null)
+        return Response.Error("Некорректный ввод: выберите 1 или 2");
+
+    return client.Send("SetNodeState", new { Name = name, Available = available });
+}
+
+static Response SetNodeVote(ServerClient client)
+{
+    var (name, error) = SelectByNumber(client, "GetNodes", "Номер узла", "Нет узлов");
+    if (error != null)
+        return error;
+
+    Console.WriteLine("Голосование: 1 - по правилам, 2 - всегда NO");
+    Console.Write("> ");
+
+    bool? voteNo = Console.ReadLine() switch
+    {
+        "1" => false,
+        "2" => true,
+        _ => null
+    };
+
+    if (voteNo == null)
+        return Response.Error("Некорректный ввод: выберите 1 или 2");
+
+    return client.Send("SetNodeVote", new { Name = name, VoteNo = voteNo });
+}
+
+static Response ProposeCourseStatus(ServerClient client)
+{
+    int? courseId = ReadId("Id курса: ");
+    if (courseId == null) return InvalidInput();
+
+    Console.WriteLine("Новый статус: 1 - Draft, 2 - Active, 3 - Closed");
+    Console.Write("> ");
+
+    string? status = Console.ReadLine() switch
+    {
+        "1" => "Draft",
+        "2" => "Active",
+        "3" => "Closed",
+        _ => null
+    };
+
+    if (status == null)
+        return Response.Error("Некорректный ввод: выберите от 1 до 3");
+
+    return client.Send("ProposeCourseStatus", new { CourseId = courseId, Status = status });
 }

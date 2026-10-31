@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Server.Consensus;
 using Server.Data;
 using Server.Handlers;
 using Server.Network;
@@ -114,9 +115,19 @@ Console.WriteLine($"--- Репликация очереди: {string.Join(" <-> 
 Console.WriteLine($"--- Каталог (не подключены): {string.Join(", ", subscriberCatalog.Keys)} ---");
 Console.WriteLine();
 
+Console.WriteLine("--- Инициализация узлов ---");
+
+Cluster cluster = new(5);
+cluster.RunElection();
+cluster.StartHeartbeatMonitor(TimeSpan.FromSeconds(5));
+
+Console.WriteLine($"--- Узлов: {cluster.Nodes.Count}, Majority = {cluster.Majority}, heartbeat каждые 5 сек ---");
+Console.WriteLine();
+
 EducationService service = new(replication, publisher);
 PubSubService pubSub = new(brokers, publisher, subscriberCatalog);
-OperationHandler handler = new(service, replication, pubSub);
+ConsensusService consensus = new(cluster, replication);
+OperationHandler handler = new(service, replication, pubSub, consensus);
 TcpServer server = new(handler);
 
 server.Start();
