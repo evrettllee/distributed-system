@@ -7,7 +7,7 @@ using Shared;
 using Tests.Helpers;
 using Xunit;
 
-namespace Tests
+namespace Tests.Unit
 {
     public class ConsensusTests
     {

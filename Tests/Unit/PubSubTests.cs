@@ -4,7 +4,7 @@ using Server.Subscribers;
 using Tests.Helpers;
 using Xunit;
 
-namespace Tests
+namespace Tests.Unit
 {
     public class PubSubTests
     {

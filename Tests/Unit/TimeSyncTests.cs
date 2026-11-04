@@ -2,7 +2,7 @@
 using Tests.Helpers;
 using Xunit;
 
-namespace Tests
+namespace Tests.Unit
 {
     public class TimeSyncTests : EducationTestBase
     {

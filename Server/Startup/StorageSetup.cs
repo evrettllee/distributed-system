@@ -10,14 +10,11 @@ namespace Server.Startup
     {
         public static ReplicationManager? Create(IConfiguration configuration)
         {
-            string? primaryConnection = configuration.GetConnectionString("Primary");
-            string? replicaConnection = configuration.GetConnectionString("Replica");
+            string? primaryConnection = ServerSettings.ReadConnection(configuration, "Primary");
+            string? replicaConnection = ServerSettings.ReadConnection(configuration, "Replica");
 
-            if (string.IsNullOrEmpty(primaryConnection) || string.IsNullOrEmpty(replicaConnection))
-            {
-                Logger.Log("Ошибка: строки подключения Primary и Replica не найдены в appsettings.json");
+            if (primaryConnection == null || replicaConnection == null)
                 return null;
-            }
 
             DataInstance primary = new("Primary", SqlServerOptions(primaryConnection));
             DataInstance replica = new("Replica", SqlServerOptions(replicaConnection));
@@ -39,7 +36,7 @@ namespace Server.Startup
 
             if (!primaryOk && !replicaOk)
             {
-                Logger.Log("ВНИМАНИЕ: оба экземпляра недоступны, запросы будут завершаться ошибкой");
+                Logger.Log("ВНИМАНИЕ: оба экземпляра недоступны, запросы будут завершаться ошибкой до их восстановления");
                 return;
             }
 

@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+**/.vs/
+**/*.user
+**/appsettings.Local.json
+.git/
+.gitignore
+.env
+Client/
+Tests/
+**/Dockerfile
+.dockerignore
+compose.yaml
