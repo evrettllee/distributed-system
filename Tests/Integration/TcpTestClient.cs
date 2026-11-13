@@ -11,10 +11,10 @@ namespace Tests.Integration
 
         public static int Port => int.TryParse(Environment.GetEnvironmentVariable("IT_PORT"), out int port) ? port : 8080;
 
-        public static async Task<Response> SendAsync(string operation, object? data = null)
+        public static async Task<Response> SendAsync(string operation, object? data = null, int? port = null)
         {
             using TcpClient client = new();
-            await client.ConnectAsync(Host, Port);
+            await client.ConnectAsync(Host, port ?? Port);
 
             NetworkStream stream = client.GetStream();
             using StreamReader reader = new(stream, Encoding.UTF8);

@@ -8,7 +8,7 @@ namespace Tests.Integration
     {
         private static readonly TimeSpan HealthTimeout = TimeSpan.FromMinutes(2);
 
-        // Интеграционный тест 1 — сервер в контейнере принимает запрос клиента, узлы ЛР №7 работают
+        // Интеграционный тест 1 — сервер в контейнере принимает запрос клиента
         [Fact]
         public async Task Server_InContainer_AcceptsRequest()
         {

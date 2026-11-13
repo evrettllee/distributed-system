@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: education-server
+  labels:
+    app: education-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: education-server
+  template:
+    metadata:
+      labels:
+        app: education-server
+    spec:
+      containers:
+        - name: server
+          image: education-server:1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APP_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: education-config
+                  key: APP_MODE
+            - name: ConnectionStrings__Primary
+              valueFrom:
+                secretKeyRef:
+                  name: education-db
+                  key: ConnectionStrings__Primary
+            - name: ConnectionStrings__Replica
+              valueFrom:
+                secretKeyRef:
+                  name: education-db
+                  key: ConnectionStrings__Replica

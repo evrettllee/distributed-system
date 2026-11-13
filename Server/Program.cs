@@ -15,6 +15,9 @@ IConfiguration configuration = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
+string mode = ServerSettings.ReadMode(configuration);
+Logger.Log($"Режим работы: {mode}, экземпляр: {Environment.MachineName}");
+
 int? port = ServerSettings.ReadPort(configuration);
 ReplicationManager? replication = StorageSetup.Create(configuration);
 

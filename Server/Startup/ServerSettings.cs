@@ -7,6 +7,7 @@ namespace Server.Startup
     public static class ServerSettings
     {
         public const int DefaultPort = 8080;
+        public const string DefaultMode = "default";
 
         public static int? ReadPort(IConfiguration configuration)
         {
@@ -19,6 +20,12 @@ namespace Server.Startup
 
             Logger.Log($"Ошибка конфигурации: Server__Port = '{value}' не является корректным портом (1-65535)");
             return null;
+        }
+
+        public static string ReadMode(IConfiguration configuration)
+        {
+            string? value = configuration["APP_MODE"];
+            return string.IsNullOrWhiteSpace(value) ? DefaultMode : value.Trim();
         }
 
         public static string? ReadConnection(IConfiguration configuration, string name)
