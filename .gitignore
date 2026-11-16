@@ -8,3 +8,4 @@ obj/
 /Data/
 appsettings.Local.json
 .env
+k8s/secret.yaml
