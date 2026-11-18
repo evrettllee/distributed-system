@@ -8,6 +8,7 @@ namespace Server.Startup
     {
         public const int DefaultPort = 8080;
         public const string DefaultMode = "default";
+        public const string DefaultVersion = "dev";
 
         public static int? ReadPort(IConfiguration configuration)
         {
@@ -26,6 +27,12 @@ namespace Server.Startup
         {
             string? value = configuration["APP_MODE"];
             return string.IsNullOrWhiteSpace(value) ? DefaultMode : value.Trim();
+        }
+
+        public static string ReadVersion(IConfiguration configuration)
+        {
+            string? value = configuration["APP_VERSION"];
+            return string.IsNullOrWhiteSpace(value) ? DefaultVersion : value.Trim();
         }
 
         public static string? ReadConnection(IConfiguration configuration, string name)

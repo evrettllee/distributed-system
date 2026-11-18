@@ -42,7 +42,7 @@ pipeline {
         stage('Package') {
             steps {
                 bat 'docker version'
-                bat 'docker build -f Server/Dockerfile -t education-server:%BUILD_NUMBER% .'
+                bat 'docker build -f Server/Dockerfile --build-arg APP_VERSION=%BUILD_NUMBER% -t education-server:%BUILD_NUMBER% .'
                 bat 'docker image inspect education-server:%BUILD_NUMBER% --format "Image: {{index .RepoTags 0}}  Id: {{.Id}}  Created: {{.Created}}  Size: {{.Size}}"'
             }
         }

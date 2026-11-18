@@ -42,5 +42,20 @@ namespace Tests.Unit
                 Environment.SetEnvironmentVariable(variable, null);
             }
         }
+
+        // Тест 63 — APP_VERSION: не задана — используется dev, задана — номер сборки
+        [Theory]
+        [InlineData(null, "dev")]
+        [InlineData("", "dev")]
+        [InlineData("12", "12")]
+        [InlineData(" 12 ", "12")]
+        public void Settings_AppVersion_DefaultOrConfigured(string? value, string expected)
+        {
+            IConfiguration configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["APP_VERSION"] = value })
+                .Build();
+
+            Assert.Equal(expected, ServerSettings.ReadVersion(configuration));
+        }
     }
 }

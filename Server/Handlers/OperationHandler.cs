@@ -1,4 +1,5 @@
-﻿using Server.Replication;
+﻿using Server.Common;
+using Server.Replication;
 using Server.Services;
 using Shared;
 using System.Text.Json;
@@ -40,7 +41,7 @@ namespace Server.Handlers
                     "CompleteCourse" => await RunAsync<StudentCoursePayload>(request.Data,
                         p => _service.CompleteCourse(p.StudentId, p.CourseId)),
                     "GetServerTime" => await _service.GetServerTime(),
-                    "GetStatus" => _replication.GetStatus(),
+                    "GetStatus" => WithVersion(_replication.GetStatus()),
                     "CompareReplicas" => _replication.CompareReplicas(),
                     "RecoverPrimary" => _replication.Recover(),
                     "GetSubscribers" => _pubSub.GetSubscribers(),
@@ -79,6 +80,12 @@ namespace Server.Handlers
             {
                 return Response.Error($"Ошибка сервера: {ex.Message}");
             }
+        }
+
+        private static Response WithVersion(Response response)
+        {
+            response.Message += $"\n-- Версия сервера: {AppInfo.Version}, экземпляр: {Environment.MachineName}";
+            return response;
         }
 
         private static Response Run<T>(string? data, Func<T, Response> action) where T : class

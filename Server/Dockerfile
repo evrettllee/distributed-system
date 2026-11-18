@@ -14,6 +14,8 @@ WORKDIR /app
 
 COPY --from=build /app/publish .
 
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
 ENV Server__Port=8080
 ENV TZ=Europe/Minsk
 
