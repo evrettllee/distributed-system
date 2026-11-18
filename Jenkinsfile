@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
     stages {
         stage('Checkout') {
             steps {
@@ -9,13 +13,15 @@ pipeline {
             }
         }
 
-        stage('Tools') {
+        stage('Restore') {
             steps {
-                bat 'dotnet --version'
-                bat 'git --version'
-                bat 'docker --version'
-                bat 'kubectl version --client'
-                bat 'kubectl get nodes'
+                bat 'dotnet restore DistributedSystem.slnx'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                bat 'dotnet build DistributedSystem.slnx --configuration Release --no-restore'
             }
         }
     }
