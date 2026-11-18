@@ -35,7 +35,7 @@ namespace Tests.Unit
                     .AddEnvironmentVariables()
                     .Build();
 
-                Assert.Equal("docker", ServerSettings.ReadMode(configuration));
+                Assert.Equal("kubernetes", ServerSettings.ReadMode(configuration));
             }
             finally
             {
