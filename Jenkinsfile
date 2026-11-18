@@ -24,5 +24,19 @@ pipeline {
                 bat 'dotnet build DistributedSystem.slnx --configuration Release --no-restore'
             }
         }
+
+        stage('Test') {
+            steps {
+                bat 'dotnet test Tests/Tests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Tests.Unit" --logger "trx;LogFileName=unit.trx" --results-directory TestResults'
+                bat 'dotnet test Tests/Tests.csproj --configuration Release --no-build --filter "Category=Integration" --logger "trx;LogFileName=integration.trx" --results-directory TestResults'
+                bat 'dotnet test Tests/Tests.csproj --configuration Release --no-build --filter "Category=Kubernetes" --logger "trx;LogFileName=kubernetes.trx" --results-directory TestResults'
+                bat 'dotnet test Tests/Tests.csproj --configuration Release --no-build --filter "Category=Load" --logger "trx;LogFileName=load.trx" --results-directory TestResults'
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'TestResults/*.trx', allowEmptyArchive: true
+                }
+            }
+        }
     }
 }
