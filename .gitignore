@@ -9,3 +9,4 @@ obj/
 appsettings.Local.json
 .env
 k8s/secret.yaml
+TestResults/
