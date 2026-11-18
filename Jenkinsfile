@@ -50,7 +50,7 @@ pipeline {
         stage('Deploy') {
             steps {
                 bat 'kubectl config current-context'
-                bat 'kubectl set image deployment/education-server app=education-server:%BUILD_NUMBER%'
+                bat 'kubectl set image deployment/education-server server=education-server:%BUILD_NUMBER%'
                 bat 'kubectl rollout status deployment/education-server --timeout=180s'
                 bat 'kubectl get deployments'
                 bat 'kubectl get pods -l app=education-server'
